@@ -1,0 +1,46 @@
+# ─── Rust ───────────────────────────────
+/target
+Cargo.lock
+
+# ─── Python ─────────────────────────────
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+
+# ─── Datasets (too large for git, download via script) ──
+datasets/
+
+# ─── Benchmark outputs ──────────────────
+logs/
+results/
+
+# ─── Report build artifacts ─────────────
+report/*.aux
+report/*.log
+report/*.out
+report/*.synctex.gz
+report/*.fls
+report/*.fdb_latexmk
+report/*.toc
+report/*.bbl
+report/*.blg
+
+# ─── Generated plots (reproducible via scripts) ──
+report/figures/*.png
+report/figures/*.csv
+
+# ─── IDE / OS ───────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ─── Temp / test files ─────────────────
+test_cpp
+test_cpp.cpp

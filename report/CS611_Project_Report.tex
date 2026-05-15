@@ -1,0 +1,348 @@
+    \documentclass[12pt, a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{setspace}
+\usepackage{amsmath,amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{tcolorbox}
+\tcbuselibrary{skins, breakable}
+
+\definecolor{navy}{HTML}{1A1A1A}
+\definecolor{accent}{HTML}{444444}
+\definecolor{graytext}{HTML}{666666}
+
+\geometry{top=2.2cm, bottom=2.2cm, left=2.3cm, right=2.3cm, headheight=25pt}
+\hypersetup{colorlinks=true, linkcolor=black, urlcolor=accent, citecolor=black}
+\titleformat{\section}{\Large\bfseries\color{navy}}{\thesection}{1em}{}[\vspace{-0.5em}\textcolor{accent}{\rule{\textwidth}{1.5pt}}]
+\titleformat{\subsection}{\large\bfseries\color{accent}}{\thesubsection}{1em}{}
+\captionsetup{font={small}, labelfont={bf, color=navy}, textfont={it}, justification=centering, skip=8pt}
+
+\pagestyle{fancy}\fancyhf{}
+\lhead{\small\textbf{\textcolor{navy}{CS 611}}}
+\rhead{\small\textbf{\textcolor{navy}{Course Project}}}
+\cfoot{\small\textcolor{graytext}{Page \thepage}}
+\renewcommand{\headrulewidth}{1pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{accent}\leaders\hrule height \headrulewidth\hfill}}
+
+\begin{document}
+
+\begin{titlepage}
+    \centering\thispagestyle{empty}\vspace*{0.1cm}
+    \IfFileExists{logo.jpg}{\includegraphics[width=0.25\textwidth]{logo.jpg}\\[0.3cm]}{\vspace{1.5cm}}
+    {\scshape\LARGE King Abdulaziz University \par}\vspace{0.1cm}
+    {\scshape\normalsize\color{graytext} Faculty of Computing and Information Technology \par}\vspace{0.05cm}
+    {\scshape\normalsize\color{graytext} Department of Computer Science \par}\vspace{0.6cm}
+    {\LARGE\bfseries CS 611: Course Project \par}\vspace{0.2cm}
+    {\large\color{graytext} Design and Analysis of Algorithms \par}\vspace{0.3cm}
+    {\normalsize\color{graytext}\textit{Sequential vs.\ Parallel Minimum Spanning Tree Algorithms\\on Road Network and E-Commerce Graph Benchmarks} \par}\vspace{0.8cm}
+    \begin{tabular}{c}
+        \textbf{\textit{Amer Aljohani}} \\ aaljohani0677@stu.kau.edu.sa \\ 2601471 \\[0.5em]
+        \textbf{\textit{Ahmad Alharbi}} \\ AALHARBI3232@stu.kau.edu.sa \\ 2601464 \\[0.5em]
+        \textbf{\textit{Abdullah Alluhaibi}} \\ AALLUHAIBI0010@stu.kau.edu.sa \\ 2601468 \\[0.8em]
+        Spring 2026 \\[0.2em]
+        \textit{Submitted to: Prof.\ Maher Khemakhem, CS 611: Design and Analysis of Algorithms}
+    \end{tabular}\vfill
+\end{titlepage}
+
+\newpage\pagenumbering{roman}\tableofcontents\newpage\pagenumbering{arabic}
+\setstretch{1.15}\widowpenalty=10000\clubpenalty=10000\raggedbottom
+
+%========================================================================================
+\section{Introduction}
+
+The Minimum Spanning Tree (MST) problem is one of the most fundamental problems in graph theory [1]. Given a connected, undirected, weighted graph $G = (V, E, w)$, the objective is to find a spanning tree $T \subseteq E$ with minimum total edge weight [1]. MST algorithms are essential in network design, VLSI routing, cluster analysis, and approximation algorithms for NP-hard problems [1].
+
+As real-world graphs scale to millions of vertices [9], classical sequential algorithms such as Kruskal's [2] cannot exploit multi-core hardware [4]. This has motivated research on parallel MST algorithms based on Bor\r{u}vka's algorithm [3], which achieves real speedup through per-component independence [4,5,6]. However, naive implementations of Bor\r{u}vka's in interpreted languages suffer from two critical bottlenecks: repeated full-edge scans without graph contraction, and interpreter overhead in hot loops [4,6].
+
+This project addresses both bottlenecks. We implement Kruskal's [2] and Bor\r{u}vka's [3] algorithms in two configurations: a baseline Python implementation and an optimized version using Numba JIT compilation with proper graph contraction [4]. We evaluate both on two SNAP benchmark datasets [9] in the domain of \textbf{road networks} (roadNet-CA, 1.96M nodes) and \textbf{e-commerce networks} (amazon0302, 262K nodes). The optimized Bor\r{u}vka implementation processes the full Amazon dataset in 0.08 seconds, compared to being infeasible in the unoptimized version.
+
+Section~2 reviews the literature. Section~3 analyzes both algorithms and the role of graph contraction. Section~4 describes the SNAP datasets and implementation. Section~5 presents results showing that proper contraction and JIT compilation transform Bor\r{u}vka from 6.6$\times$ slower than Kruskal to competitive or faster. Section~6 concludes.
+
+\textbf{Work Distribution:} Section~2 was prepared by \textbf{Amer Aljohani}. Section~3 was prepared by \textbf{Ahmad Alharbi}. Section~4 was prepared by \textbf{Abdullah Alluhaibi}. Sections~5 and~6 represent shared work.
+
+%========================================================================================
+\section{Literature Review}
+
+\subsection{Classical Sequential Algorithms}
+
+Kruskal's algorithm [2] sorts all edges and greedily adds the lightest non-cycle-forming edge using Union-Find with path compression and union by rank [1]. Its complexity is $O(E \log E)$ [1]. Prim's algorithm achieves $O(E + V \log V)$ with Fibonacci heaps but is inherently serial [1]. Both are proven correct by the cut property [1].
+
+\subsection{Parallel Algorithms Based on Bor\r{u}vka}
+
+Bor\r{u}vka's algorithm [3] operates in rounds where every component independently selects its minimum-weight outgoing edge [1]. The component count halves each round, yielding $O(\log V)$ rounds [1]. The find-minimum phase is embarrassingly parallel [4]. Durbhakula [4] achieved 2.03$\times$ speedup on 6 C++ cores. Schimek et al.\ [5] scaled to 65,536 cores (800$\times$). Bhargava and Zaia [6] achieved 13.3$\times$ on CPU and 29$\times$ on GPU. Fallin et al.\ [8] presented state-of-the-art GPU MST at SC '23. Dhouib [7] proposed DM-MSTP, a matrix-based $O(V^2)$ method for dense graphs.
+
+\subsection{The Contraction Optimization}
+
+A critical implementation detail noted by Durbhakula [4] and Bhargava and Zaia [6] is that Bor\r{u}vka's algorithm must perform \textbf{physical graph contraction} after each round: internal edges (both endpoints in the same component) are removed, and multi-edges between components are reduced to the lightest [4]. Without contraction, the algorithm scans all $E$ original edges in every round, multiplying the work by $O(\log V)$ [4]. With contraction, the edge set shrinks exponentially, making Bor\r{u}vka competitive with Kruskal even sequentially [4,6].
+
+%========================================================================================
+\section{Algorithm Design and Analysis}
+
+\subsection{Kruskal's Algorithm}
+
+Kruskal's sorts $E$ edges in $O(E \log E)$, then scans once with $O(\alpha(V))$ Union-Find per edge [1,2]. Total: $O(E \log E)$ [1]. Its sort-once-scan-once structure makes it fast sequentially, but the global sort is inherently serial [4].
+
+\begin{algorithm}[H]
+\caption{Kruskal's MST (Sequential) [2]}
+\begin{algorithmic}[1]
+\Require Connected graph $G = (V, E, w)$
+\Ensure MST edge set $T$, total weight $W$
+\State Sort $E$ by weight $w$ in non-decreasing order
+\State Initialize Union-Find $\mathcal{U}$ over $V$ with path compression and union by rank
+\State $T \gets \emptyset$,\; $W \gets 0$
+\For{each edge $(u, v, w)$ in sorted order}
+    \If{$\mathcal{U}.\textsc{Find}(u) \neq \mathcal{U}.\textsc{Find}(v)$}
+        \State $\mathcal{U}.\textsc{Union}(u, v)$
+        \State $T \gets T \cup \{(u,v)\}$,\; $W \gets W + w$
+    \EndIf
+    \If{$|T| = |V| - 1$} \textbf{break} \EndIf
+\EndFor
+\State \Return $T, W$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Bor\r{u}vka's Algorithm with Contraction}
+
+Each round: (1) find minimum outgoing edge per component (parallel) [4]; (2) add selected edges to MST; (3) merge components and contract the graph [4]. With contraction, the edge count decreases by at least half each round [4,6]. Sequential complexity: $O(E \log V)$ [1]. Parallel complexity with $p$ threads: $O(E/p \cdot \log V)$ ideal [4].
+
+\begin{algorithm}[H]
+\caption{Bor\r{u}vka's MST (Sequential, with Graph Contraction) [3,4]}
+\begin{algorithmic}[1]
+\Require Connected graph $G = (V, E, w)$
+\Ensure MST edge set $T$, total weight $W$
+\State Initialize Union-Find $\mathcal{U}$ over $V$
+\State $T \gets \emptyset$,\; $W \gets 0$
+\While{number of components $> 1$}
+    \For{each component $C$}
+        \State $\text{cheapest}[C] \gets$ lightest edge leaving $C$
+    \EndFor
+    \For{each component $C$ with $\text{cheapest}[C] = (u, v, w)$}
+        \If{$\mathcal{U}.\textsc{Find}(u) \neq \mathcal{U}.\textsc{Find}(v)$}
+            \State $\mathcal{U}.\textsc{Union}(u, v)$
+            \State $T \gets T \cup \{(u,v)\}$,\; $W \gets W + w$
+        \EndIf
+    \EndFor
+    \State \textbf{Contract:} remove all edges $(u,v)$ where $\mathcal{U}.\textsc{Find}(u) = \mathcal{U}.\textsc{Find}(v)$
+\EndWhile
+\State \Return $T, W$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{Bor\r{u}vka's MST (Parallel, with Graph Contraction) [3,4,6]}
+\begin{algorithmic}[1]
+\Require Connected graph $G = (V, E, w)$, $p$ threads
+\Ensure MST edge set $T$, total weight $W$
+\State Initialize Union-Find $\mathcal{U}$ over $V$
+\State $T \gets \emptyset$,\; $W \gets 0$
+\While{number of components $> 1$}
+    \State \textbf{Parallel:} flatten component IDs via path compression \Comment{$O(V/p)$}
+    \State \textbf{Parallel:} for each edge, find minimum outgoing edge per component \Comment{$O(E/p)$}
+    \State \textbf{Serial:} merge selected components via Union-Find
+    \State $T \gets T \cup \{\text{selected edges}\}$,\; update $W$
+    \State \textbf{Parallel:} contract graph --- remove internal edges \Comment{$O(E/p)$}
+\EndWhile
+\State \Return $T, W$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{The Role of JIT Compilation}
+
+Python's interpreter adds overhead to every loop iteration, function call, and object allocation [4]. For graph algorithms with millions of iterations, this overhead dominates the actual computation. Numba JIT compiles Python functions to machine code via LLVM, eliminating interpreter overhead and enabling OpenMP-style parallelism through \texttt{prange} [10]. This bypasses the Global Interpreter Lock (GIL) that prevents true multi-threading in standard Python [4].
+
+\begin{table}[H]\centering\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lccl}\toprule
+\textbf{Algorithm} & \textbf{Complexity} & \textbf{Parallel?} & \textbf{Contraction?} \\\midrule
+Kruskal's [2] & $O(E \log E)$ & No [4] & N/A \\
+Bor\r{u}vka (no contraction) & $O(E \cdot \log V)$ & Yes [4] & No (full scan each round) \\
+Bor\r{u}vka (with contraction) [4] & $O(E \log V)$ & Yes [4] & Yes ($E$ shrinks per round) \\
+\bottomrule
+\end{tabular}
+\caption{Without contraction, Bor\r{u}vka scans all $E$ edges $\log V$ times. With contraction, work decreases exponentially [4].}
+\end{table}
+
+%========================================================================================
+\section{Datasets and Implementation}
+
+\subsection{SNAP Benchmark Datasets}
+
+\begin{table}[H]\centering\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lrrrl}\toprule
+\textbf{Dataset} & \textbf{Nodes} & \textbf{Edges} & \textbf{Avg.\ Deg.} & \textbf{Domain} \\\midrule
+roadNet-CA [9] & 1,965,206 & 2,766,607 & 3.1 & California road network \\
+amazon0302 [9] & 262,111 & 899,792 & 6.1 & Product co-purchase \\\bottomrule
+\end{tabular}
+\caption{SNAP benchmark datasets [9]. Road network is sparse and planar. Amazon has power-law degree distribution with high-degree hubs [9].}
+\end{table}
+
+\subsection{Two Implementation Configurations}
+
+\textbf{Baseline (Pure Python):} Standard Python with list-based edges, dictionary-based minimum tracking, and no graph contraction. Represents the naive implementation commonly found in textbooks.
+
+\textbf{Optimized (Numba JIT + Contraction):} All hot loops compiled to machine code via Numba \texttt{@njit} [10]. Pre-allocated NumPy arrays replace dictionaries. Bor\r{u}vka performs physical contraction after each round (internal edges filtered out). Parallel variant uses \texttt{prange} for the find-minimum phase, which releases the GIL and distributes work across CPU cores [10].
+
+\textbf{Native (Rust + Rayon):} Native implementations using standard \texttt{Vec} structures and \texttt{rayon} for parallel data processing. Employs pattern-defeating quicksort for Kruskal and efficient work-stealing for Bor\r{u}vka.
+
+\subsection{Experimental Configuration}
+
+All benchmarks run on an AMD Ryzen 9 3900X (12 physical cores, 24 threads via SMT, up to 4.67\,GHz). Five experiments on SNAP subgraphs [9] with 8 graph sizes per dataset (1K to 200K nodes for road, 1K to 262K for Amazon). Each measurement repeated 5 times; we report the median with min/max error bars. Thread counts: 1, 2, 4, 6, 8, 12, 16, 24. Correctness validated against NetworkX [12]---an independent MST implementation---at all 16 graph sizes (8 road + 8 Amazon). All 16 validations passed with exact weight agreement (Figure~\ref{fig:ahmed_validation}).
+
+%========================================================================================
+\section{Results and Discussion}
+
+\subsection{E1: Road Network Scalability}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.78\textwidth]{figures/ahmed_python_road_scalability.png}
+\caption{E1 (Python/Numba): Scalability on roadNet-CA from 1K to 200K nodes. Error bars show min--max over 5 runs. Bor\r{u}vka-Seq (0.016s at 200K) is $1.6\times$ faster than Kruskal (0.026s), while Bor\r{u}vka-Par adds overhead from prange scheduling [2,3,9].}
+\label{fig:ahmed_py_road}
+\end{figure}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.78\textwidth]{figures/ahmed_rust_road_scalability.png}
+\caption{E1 (Rust/Rayon): Same sweep in Rust. Kruskal is fastest (0.013s at 200K) due to \texttt{sort\_unstable} (pdqsort). Bor\r{u}vka-Seq (0.017s) is slightly slower. Bor\r{u}vka-Par incurs thread-pool overhead at these sizes [2,4,11].}
+\label{fig:ahmed_rust_road}
+\end{figure}
+
+RoadNet-CA is a sparse, planar graph (avg.\ degree 3.1). With Numba JIT and contraction, Bor\r{u}vka-Seq outperforms Kruskal because contraction reduces the already-sparse edge set rapidly ($\sim$17 rounds for 200K nodes). Each round eliminates $>50\%$ of edges [4]. In Rust, Kruskal's advantage returns because \texttt{sort\_unstable} (pdqsort) is $2\times$ faster than NumPy's \texttt{argsort} (introsort), and the sort-once cost dominates [11].
+
+The Bor\r{u}vka-Par line sits above Bor\r{u}vka-Seq at all sizes because the parallel overhead (thread-pool creation, comp-ID flattening, edge-filter kernel launch) exceeds the benefit for graphs with $<300$K edges. The sequential find-minimum phase---which is inherently serial due to indexed-reduction data races---remains the bottleneck [4].
+
+\subsection{E2: Amazon Co-Purchase Scalability}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.78\textwidth]{figures/ahmed_python_amazon_scalability.png}
+\caption{E2 (Python/Numba): Amazon from 1K to 262K (full dataset, 900K edges). Bor\r{u}vka-Seq (0.068s) and Bor\r{u}vka-Par (0.057s) outperform Kruskal (0.112s) at full scale. The denser graph amplifies contraction's benefit [3,9].}
+\label{fig:ahmed_py_amazon}
+\end{figure}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.78\textwidth]{figures/ahmed_rust_amazon_scalability.png}
+\caption{E2 (Rust/Rayon): Full Amazon in Rust. Kruskal (0.059s), Bor\r{u}vka-Seq (0.072s), and Bor\r{u}vka-Par (0.063s) converge at full scale [2,3,9].}
+\label{fig:ahmed_rust_amazon}
+\end{figure}
+
+Amazon0302 has a power-law degree distribution (avg.\ degree 6.1) with high-degree hubs [9]. The denser structure means each contraction round removes more edges than in the road network, making Bor\r{u}vka competitive even sequentially. At full scale (262K nodes, 900K edges), Python/Numba Bor\r{u}vka-Par (0.057s) achieves a $1.97\times$ speedup over Kruskal (0.112s) due to the combination of contraction benefit and the parallel comp-ID flattening + edge filtering phases [4]. In the pure Python baseline, Bor\r{u}vka was skipped entirely above 50K nodes because repeated scanning of 900K edges was impractical [3].
+
+\subsection{E3: Parallel Speedup Analysis}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth]{figures/ahmed_python_parallel_speedup.png}
+\caption{E3 (Python/Numba): Speedup vs.\ thread count on 12-core/24-thread Ryzen 9 3900X. Road (100K, 200K): flat at $\sim$0.7--0.8$\times$ (parallel overhead dominates sparse graph). Amazon (262K): peak 1.35$\times$ at 24 threads as denser edges amortize overhead [4,10].}
+\label{fig:ahmed_py_speedup}
+\end{figure}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth]{figures/ahmed_rust_parallel_speedup.png}
+\caption{E3 (Rust/Rayon): Peak speedup of 1.94$\times$ on road (200K, 8 threads) and 1.48$\times$ on Amazon (262K, 8 threads). Rayon's work-stealing scheduler achieves better utilization than Numba's static prange. Performance degrades beyond 12 physical cores due to SMT contention [4,11].}
+\label{fig:ahmed_rust_speedup}
+\end{figure}
+
+\textbf{Python/Numba:} On the sparse road network, Bor\r{u}vka-Par is \emph{slower} than Bor\r{u}vka-Seq at all thread counts (0.7--0.8$\times$ ``speedup''). The parallel phases (\texttt{prange} for comp-ID flattening, edge filtering) process only $\sim$138K edges at 100K nodes, which is too little work to amortize Numba's OpenMP thread-fork overhead [10]. On the denser Amazon graph (900K edges), the parallel variant achieves modest 1.35$\times$ speedup at 24 threads because the larger edge set provides enough per-thread work [4,10].
+
+\textbf{Rust/Rayon:} Rayon's work-stealing scheduler achieves substantially better results: 1.94$\times$ on road (200K nodes, 8 threads) and 1.48$\times$ on Amazon (262K, 8 threads). The superior scaling comes from three factors: (1) Rayon uses adaptive task granularity rather than fixed-chunk \texttt{prange} [11], (2) no GIL-equivalent contention, and (3) lower per-thread overhead ($\sim\mu$s vs.\ $\sim$ms for Numba) [11]. Beyond 12 physical cores, SMT threads share execution units, causing the $>$16-thread degradation visible in Figure~\ref{fig:ahmed_rust_speedup}.
+
+\textbf{Amdahl's Law Analysis:} Our parallel Bor\r{u}vka has a large serial fraction $f$: the find-minimum phase and merge phase are both sequential. Using Amdahl's formula $S = 1/(f + (1-f)/p)$, the observed 1.94$\times$ peak speedup at $p=8$ implies $f \approx 0.44$, meaning $\sim$56\% of the work is parallelizable (comp-ID flattening + edge filtering). This explains why speedup saturates well below the 12-core physical limit [4,6].
+
+\subsection{E4: Parallel Efficiency}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth]{figures/ahmed_parallel_efficiency.png}
+\caption{Parallel efficiency = (speedup / threads) $\times$ 100\%. All configurations show rapidly declining efficiency, confirming that the sequential fraction dominates. Rust achieves $\sim$100\% efficiency at 1 thread (baseline match) and $\sim$20\% at 8 threads [4,11].}
+\label{fig:ahmed_efficiency}
+\end{figure}
+
+Parallel efficiency drops below 50\% beyond 2 threads in all configurations because Bor\r{u}vka's serial merge phase cannot be parallelized without lock-free concurrent Union-Find [4,6]. The pink vertical line marks the physical core boundary (12 cores); beyond this, SMT provides diminishing returns as hardware threads share ALUs and caches [4].
+
+\subsection{E5: Cross-Language Comparison (Python vs.\ Rust)}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth]{figures/ahmed_python_vs_rust_comparison.png}
+\caption{E5: Python (dashed) vs.\ Rust (solid) on both datasets. Rust is consistently faster for Kruskal (2--2.4$\times$) but nearly identical for Bor\r{u}vka-Seq ($\sim$1.0--1.5$\times$) [2,3].}
+\label{fig:ahmed_cross_lang}
+\end{figure}
+
+\begin{figure}[H]\centering
+\includegraphics[width=\textwidth]{figures/ahmed_rust_over_python_ratio.png}
+\caption{E5: Rust/Python speedup ratio. Kruskal shows consistent 2.0--2.4$\times$ advantage (sort-dominated). Bor\r{u}vka's ratio stays near 1.0--1.5$\times$, confirming Numba's LLVM backend approaches native performance for integer loops [10,11].}
+\label{fig:ahmed_ratio}
+\end{figure}
+
+The cross-language comparison reveals a key finding: Numba JIT closes the performance gap for \emph{compute-bound} loops (Bor\r{u}vka's find-minimum phase consists of simple integer comparisons and array lookups), achieving within 0--50\% of Rust. However, Rust maintains a consistent $\sim$2$\times$ advantage for Kruskal because \texttt{sort\_unstable} uses pattern-defeating quicksort (pdqsort), which is $2\times$ faster than NumPy's introsort for random integer arrays [11]. The MST weights match exactly across both languages at all 16 sizes (Table~\ref{tab:perf}), confirming correctness of the unified LCG PRNG seeding strategy.
+
+\subsection{Third-Party Validation}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.85\textwidth]{figures/ahmed_validation_summary.png}
+\caption{NetworkX [12] validation: all 16 graph sizes produce identical MST weights across Kruskal, Bor\r{u}vka-Seq, Bor\r{u}vka-Par, and NetworkX's independent Kruskal implementation.}
+\label{fig:ahmed_validation}
+\end{figure}
+
+All three of our algorithms (Kruskal, Bor\r{u}vka-Seq, Bor\r{u}vka-Par) were validated against NetworkX [12], an independent Python graph library that implements Kruskal's algorithm separately. At every graph size---from 996 vertices (road, 1K) to 262,111 vertices (Amazon, full)---our MST weight matched NetworkX exactly. This confirms correctness of the Union-Find implementation, the graph contraction logic, and the parallel merge phase.
+
+\subsection{Summary of Performance}
+
+\begin{table}[H]\centering\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{lccccc}\toprule
+\textbf{Config} & \textbf{Kruskal} & \textbf{Bor\r{u}vka-Seq} & \textbf{Bor\r{u}vka-Par} & \textbf{Amazon Full} & \textbf{Valid.} \\\midrule
+Pure Python & 0.162s & 1.066s & N/A & Skipped & --- \\
+Numba + Contraction & 0.012s & 0.008s & 0.011s & 0.057s & \checkmark \\
+Rust + Contraction & 0.005s & 0.007s & 0.015s & 0.063s & \checkmark \\\midrule
+\textbf{Numba Speedup} & \textbf{13$\times$} & \textbf{133$\times$} & N/A & \textbf{Feasible} & \\
+\textbf{Rust Speedup} & \textbf{32$\times$} & \textbf{152$\times$} & N/A & \textbf{Feasible} & \\
+\bottomrule
+\end{tabular}
+\caption{roadNet-CA at 100K nodes (median of 5 runs). ``Valid.'' = all 3 algorithms match NetworkX [12]. Numba JIT + contraction transforms Bor\r{u}vka from 6.6$\times$ slower than Kruskal to $1.5\times$ \emph{faster} [2,3,4,10,11].}
+\label{tab:perf}
+\end{table}
+
+The improvement in Bor\r{u}vka comes from two sources: JIT/native compilation eliminates interpreter overhead ($\sim$10$\times$) [10,11], and graph contraction eliminates redundant edge scans ($\sim$8$\times$ for $\lceil\log_2(100{,}000)\rceil = 17$ rounds) [4]. Combined, these optimizations close the gap between Bor\r{u}vka and Kruskal, validating the theoretical prediction that both have comparable $O(E \log V)$ and $O(E \log E)$ complexity [1].
+
+%========================================================================================
+\section{Conclusion}
+
+This project evaluated Kruskal's [2] and Bor\r{u}vka's [3] algorithms on two SNAP benchmark datasets [9] (roadNet-CA and amazon0302), implemented in Python (Numba JIT) and Rust (Rayon), and validated against NetworkX [12]. Five experiments on an AMD Ryzen 9 3900X (12 cores / 24 threads) produced the following findings.
+
+\textbf{Finding 1:} Naive Python implementations are misleading. Without graph contraction and JIT compilation, Bor\r{u}vka appears 6.6$\times$ slower than Kruskal [3]. With both optimizations, Bor\r{u}vka matches or exceeds Kruskal's sequential performance [2,3,4].
+
+\textbf{Finding 2:} Graph contraction is essential for Bor\r{u}vka [4]. Without it, every round scans all $E$ edges. With it, the edge set shrinks exponentially, reducing total work by a factor of $\log V$ [4,6].
+
+\textbf{Finding 3:} The full Amazon co-purchase network (262K nodes, 900K edges) completes in 0.057s (Python/Numba) and 0.063s (Rust) [3,9], confirming that the algorithm scales to real-world datasets when properly implemented [4,6].
+
+\textbf{Finding 4:} Parallel speedup is limited by the large serial fraction ($f \approx 0.44$ by Amdahl's Law). The sequential find-minimum and merge phases prevent speedup beyond $\sim$2$\times$ even on 12 cores. Rust/Rayon achieves 1.94$\times$ peak vs.\ Python/Numba's 1.35$\times$ due to lower thread-management overhead [4,10,11].
+
+\textbf{Finding 5:} Numba JIT achieves within 0--50\% of native Rust performance for Bor\r{u}vka's compute-bound loops, but Rust maintains a consistent $\sim$2$\times$ advantage for sort-dominated algorithms (Kruskal) due to superior \texttt{sort\_unstable} (pdqsort) [10,11].
+
+\textbf{Recommendation:} Use Kruskal's for quick sequential prototyping [2]. For parallel production systems, use Bor\r{u}vka with graph contraction and a lock-free concurrent Union-Find to reduce the serial fraction [4,6,8]. Compile with Numba for rapid development or Rust/C++ for maximum throughput [10,11].
+
+%========================================================================================
+\newpage
+\section*{References}
+\addcontentsline{toc}{section}{References}
+\begin{enumerate}[leftmargin=1.5cm, label={[\arabic*]}, itemsep=2pt, parsep=0pt]
+    \item T.~H.\ Cormen et al., \textit{Introduction to Algorithms}, 4th ed., MIT Press, 2022.
+    \item J.~B.\ Kruskal, ``On the shortest spanning subtree,'' \textit{Proc.\ AMS}, vol.~7, no.~1, pp.~48 to 50, 1956.
+    \item O.\ Bor\r{u}vka, ``O jist\'{e}m probl\'{e}mu minim\'{a}ln\'{i}m,'' 1926.
+    \item S.~M.\ Durbhakula, ``Parallel minimum spanning tree algorithms and evaluation,'' arXiv:2005.06913, 2020.
+    \item M.\ Schimek et al., ``Engineering massively parallel MST algorithms,'' arXiv:2302.12199, 2023.
+    \item S.\ Bhargava and J.\ Zaia, ``Parallelizing MST using Bor\r{u}vka's in ParlayLib and CUDA,'' CMU 15-618, 2023.
+    \item S.\ Dhouib, ``DM-MSTP,'' \textit{Results in Control and Optimization}, vol.~14, p.~100359, 2024.
+    \item A.\ Fallin et al., ``A high-performance MST implementation for GPUs,'' \textit{Proc.\ SC '23}, pp.~1 to 13, 2023.
+    \item J.\ Leskovec and A.\ Krevl, ``SNAP Datasets,'' \url{http://snap.stanford.edu/data}, 2014.
+    \item S.\ K.\ Lam, A.\ Pitrou, and S.\ Seibert, ``Numba: A LLVM-based Python JIT compiler,'' in \textit{Proc.\ LLVM-HPC Workshop}, pp.~1 to 6, 2015.
+    \item N.\ Matsakis and A.\ Turon, ``Rayon: A data parallelism library for Rust,'' \url{https://github.com/rayon-rs/rayon}, 2024.
+    \item A.~A.\ Hagberg, D.~A.\ Schult, and P.~J.\ Swart, ``Exploring network structure, dynamics, and function using NetworkX,'' in \textit{Proc.\ SciPy}, pp.~11 to 15, 2008.
+\end{enumerate}
+
+\end{document}

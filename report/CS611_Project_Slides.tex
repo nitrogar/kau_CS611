@@ -1,0 +1,264 @@
+\documentclass[aspectratio=169, 11pt]{beamer}
+\usetheme{Madrid}\usecolortheme{whale}\usepackage{ragged2e}
+\definecolor{kaugreen}{RGB}{0, 100, 60}\definecolor{kaudark}{RGB}{20, 20, 40}
+\definecolor{kaugray}{RGB}{240, 240, 240}\definecolor{clr1}{RGB}{0, 90, 160}
+\definecolor{clr2}{RGB}{180, 60, 30}\definecolor{clr3}{RGB}{0, 130, 130}
+\setbeamercolor{structure}{fg=kaugreen}
+\setbeamercolor{palette primary}{bg=kaugreen!90!black, fg=white}
+\setbeamercolor{palette secondary}{bg=kaugreen, fg=white}
+\setbeamercolor{palette tertiary}{bg=kaugreen!80!black, fg=white}
+\setbeamercolor{frametitle}{bg=kaugreen!90!black, fg=white}
+\setbeamercolor{title}{fg=kaudark}\setbeamercolor{block title}{bg=kaugreen, fg=white}
+\setbeamercolor{block body}{bg=kaugray}\setbeamercolor{item}{fg=kaugreen}
+\setbeamerfont{title}{size=\Large, series=\bfseries}
+\setbeamerfont{frametitle}{size=\large, series=\bfseries}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}{\hfill\insertframenumber/\inserttotalframenumber\hspace{1em}\vspace{0.5em}}
+\usepackage{graphicx}\usepackage{booktabs}\usepackage{amsmath}\usepackage{pifont}
+\setbeamertemplate{sidebar right}{\vfill\IfFileExists{logo.jpg}{\includegraphics[height=1.2cm]{logo.jpg}\hspace{0.3cm}}{}\vspace{0.3cm}}
+\begin{document}
+
+% 1/10: TITLE
+{\setbeamertemplate{sidebar right}{}\setbeamertemplate{footline}{}
+\begin{frame}[plain]
+\begin{center}
+    \vspace{0.3cm}
+    \IfFileExists{logo.jpg}{\includegraphics[width=0.15\textwidth]{logo.jpg}\\[0.2cm]}{\vspace{0.5cm}}
+    {\scshape\large King Abdulaziz University}\\[0.05cm]
+    {\small\color{kaugreen!80!black} Faculty of Computing and Information Technology}\\[0.02cm]
+    {\small\color{kaugreen!80!black} Department of Computer Science}\\[0.5cm]
+    {\LARGE\bfseries\color{kaudark} CS 611: Course Project}\\[0.25cm]
+    {\small\color{kaugreen!80!black}\textit{Sequential vs.\ Parallel Minimum Spanning Tree Algorithms\\on Road Network and E-Commerce Graph Benchmarks}}\\[0.5cm]
+    {\small Spring 2026 \quad$\cdot$\quad \textit{Submitted to Prof.\ Maher Khemakhem}}
+\end{center}
+\end{frame}}
+
+% 2/10: PROBLEM + LITERATURE
+\begin{frame}{Problem, Objectives, and Literature}
+\begin{block}{Problem}
+MST connects all vertices with minimum cost [1]. Naive Bor\r{u}vka implementations appear 6 to 8$\times$ slower than Kruskal [2,3], but this is caused by missing graph contraction and interpreter overhead, not algorithmic inferiority [4].
+\end{block}
+\vspace{0.2em}
+\textbf{Objectives:} Fix Bor\r{u}vka with contraction + Numba JIT [4,10], evaluate on SNAP benchmarks [9].
+\vspace{0.2em}
+\small\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.8cm} p{2.5cm} p{5.5cm}}
+\toprule
+\textbf{Source} & \textbf{Type} & \textbf{Key Finding} \\
+\midrule
+Cormen et al.\ [1] & Textbook & Kruskal: $O(E \log E)$; Bor\r{u}vka: $O(E \log V)$ \\
+Durbhakula [4] & C++, 6 cores & 2.03$\times$ speedup; contraction is essential \\
+Bhargava \& Zaia [6] & CPU + GPU & 13.3$\times$ (CPU), 29$\times$ (GPU) \\
+Lam et al.\ [10] & Numba JIT & LLVM compilation bypasses Python GIL \\
+\bottomrule
+\end{tabular}
+\end{frame}
+
+% 3/10: ALGORITHMS
+\begin{frame}{Algorithm Design: Kruskal vs Bor\r{u}vka [1,2,3]}
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+\begin{block}{Kruskal's (Sequential) [2]}
+\begin{enumerate}
+    \item Sort all $E$ edges by weight [2]
+    \item Scan once: add edge if no cycle [1]
+    \item Union-Find: $O(\alpha(V))$ per op [1]
+\end{enumerate}
+\textbf{Complexity:} $O(E \log E)$ [1]\\
+\textbf{Strength:} Sort once, scan once [2]\\
+\textbf{Weakness:} Sort is inherently serial [4]
+\end{block}
+\end{column}
+\begin{column}{0.48\textwidth}
+\begin{block}{Bor\r{u}vka's (Parallel) [3]}
+\textbf{Each round} ($\leq \log_2 V$ rounds) [1]:
+\begin{enumerate}
+    \item {\color{kaugreen}Parallel:} Find min edge per component [4]
+    \item Add selected edges to MST [3]
+    \item {\color{clr2}Contract:} Remove internal edges [4]
+\end{enumerate}
+\textbf{Key:} Without contraction, scans all $E$ edges $\log V$ times [4]. With contraction, edge set shrinks exponentially [4,6].
+\end{block}
+\end{column}
+\end{columns}
+\end{frame}
+
+% 4/10: OPTIMIZATION
+\begin{frame}{The Two Optimizations: Contraction + Numba JIT [4,10]}
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+\begin{block}{Graph Contraction [4]}
+\begin{itemize}
+    \item After each round, remove edges where both endpoints are in the same component [4]
+    \item Edge count decreases by $\geq$50\% per round [4]
+    \item Eliminates $O(\log V)$ factor of redundant scanning [4,6]
+\end{itemize}
+\end{block}
+\end{column}
+\begin{column}{0.48\textwidth}
+\begin{block}{Numba JIT Compilation [10]}
+\begin{itemize}
+    \item Compiles Python to machine code via LLVM [10]
+    \item Eliminates interpreter overhead ($\sim$10$\times$) [10]
+    \item \texttt{prange} enables OpenMP-style multi-threading [10]
+    \item Bypasses Python's GIL [10]
+\end{itemize}
+\end{block}
+\end{column}
+\end{columns}
+\vspace{0.3em}
+\begin{block}{Combined Effect on roadNet-CA (100K nodes)}
+Python Bor\r{u}vka: \textbf{1.066s}. \quad Numba + Contraction Bor\r{u}vka: \textbf{0.013s}. \quad \textbf{82$\times$ faster.}
+\end{block}
+\end{frame}
+
+% 5/10: DATASETS
+\begin{frame}{SNAP Benchmark Datasets [9]}
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+\begin{block}{Datasets [9]}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Dataset} & \textbf{Nodes} & \textbf{Edges} \\
+\midrule
+roadNet-CA & 1.96M & 2.77M \\
+amazon0302 & 262K & 900K \\
+\bottomrule
+\end{tabular}
+\vspace{0.3em}
+\textbf{Road:} sparse, planar, avg.\ deg 3.1 [9]\\
+\textbf{Amazon:} power-law, avg.\ deg 6.1 [9]
+\end{block}
+\end{column}
+\begin{column}{0.48\textwidth}
+\begin{block}{Three Experiments}
+\begin{enumerate}
+    \item \textbf{E1:} Road network scalability (5K to 100K) [9]
+    \item \textbf{E2:} Amazon scalability (5K to 262K full) [9]
+    \item \textbf{E3:} Parallel speedup measurement
+\end{enumerate}
+\end{block}
+\vspace{0.3em}
+\textbf{Correctness:} All variants produce identical MST weights on every instance.
+\end{column}
+\end{columns}
+\end{frame}
+
+% 6/10: E1 ROAD RESULTS
+\begin{frame}{E1: Road Network Results (SNAP roadNet-CA) [9]}
+\begin{columns}[T]
+\begin{column}{0.55\textwidth}
+\centering
+\includegraphics[width=\textwidth]{figures/figure1_road_scalability.png}
+\end{column}
+\begin{column}{0.42\textwidth}
+\vspace{0.3cm}
+\textbf{With Numba + Contraction [4,10]:}
+\begin{itemize}
+    \item Bor\r{u}vka-Seq \textbf{matches Kruskal} (0.013s vs 0.017s at 100K) [2,3]
+    \item Bor\r{u}vka-Par competitive on single core [4]
+    \item Pure Python: Bor\r{u}vka was 6.6$\times$ \textbf{slower}
+    \item Numba: Bor\r{u}vka is 1.3$\times$ \textbf{faster}
+\end{itemize}
+\vspace{0.3em}
+\textbf{Root cause:} Contraction removes internal edges, JIT removes interpreter overhead [4,10].
+\end{column}
+\end{columns}
+\end{frame}
+
+% 7/10: E2 AMAZON RESULTS
+\begin{frame}{E2: Amazon Co-Purchase Network (SNAP amazon0302) [9]}
+\begin{columns}[T]
+\begin{column}{0.55\textwidth}
+\centering
+\includegraphics[width=\textwidth]{figures/figure2_amazon_scalability.png}
+\end{column}
+\begin{column}{0.42\textwidth}
+\vspace{0.3cm}
+\textbf{Full dataset (262K nodes, 900K edges) [9]:}
+\begin{itemize}
+    \item Kruskal: \textbf{0.12s} [2]
+    \item Bor\r{u}vka-Seq: \textbf{0.10s} [3]
+    \item Bor\r{u}vka-Par: \textbf{0.08s} [4]
+\end{itemize}
+\vspace{0.3em}
+\textbf{Pure Python:} Bor\r{u}vka was \textbf{skipped} above 50K nodes (too slow).
+
+\textbf{Numba + Contraction:} Full dataset in 0.08s. Bor\r{u}vka-Par 1.25$\times$ faster than Bor\r{u}vka-Seq [4,10].
+\end{column}
+\end{columns}
+\end{frame}
+
+% 8/10: PYTHON VS NUMBA + PARALLEL
+\begin{frame}{Impact of Optimization: Python vs Numba [10]}
+
+\renewcommand{\arraystretch}{1.3}
+\begin{table}\centering
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Configuration} & \textbf{Kruskal} & \textbf{B-Seq} & \textbf{B-Par} & \textbf{Full Amazon?} \\
+\midrule
+Pure Python (no contraction) & 0.162s & 1.066s & Slower & Skipped \\
+Numba JIT + Contraction [4,10] & 0.017s & 0.013s & 0.014s & \textbf{0.08s} \\
+\midrule
+\textbf{Improvement} & \textbf{9.5$\times$} & \textbf{82$\times$} & N/A & Feasible \\
+\bottomrule
+\end{tabular}
+\caption*{roadNet-CA at 100K nodes. Contraction: $\sim$8$\times$ (eliminates $\log V$ scans) [4]. JIT: $\sim$10$\times$ (eliminates interpreter) [10].}
+\end{table}
+
+\vspace{0.3em}
+
+Published C++ parallel results [4,6]: 2.03$\times$ (CAS, 6 cores) [4], 13.3$\times$ (ParlayLib, 8 cores) [6], 29$\times$ (GPU) [6]. Numba \texttt{prange} uses the same OpenMP threading model [10].
+
+\end{frame}
+
+% 9/10: CONCLUSION
+\begin{frame}{Conclusion and Recommendations}
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+\begin{block}{Key Findings}
+\begin{itemize}
+    \item Contraction + JIT: Bor\r{u}vka goes from 6.6$\times$ slower to \textbf{competitive or faster} than Kruskal [2,3,4]
+    \item 82$\times$ improvement from two optimizations [4,10]
+    \item Full SNAP datasets tractable [9]
+    \item Graph structure matters: road (deg 3.1) vs Amazon (deg 6.1) [9]
+\end{itemize}
+\end{block}
+\end{column}
+\begin{column}{0.48\textwidth}
+\begin{block}{Recommendations}
+\begin{itemize}
+    \item \textbf{Sequential:} Kruskal for prototyping [2]
+    \item \textbf{Production:} Bor\r{u}vka with contraction + compiled execution [4,6]
+    \item \textbf{Multi-core:} Numba \texttt{prange} or C++ OpenMP [4,10]
+    \item \textbf{GPU:} CUDA for 29$\times$ speedup [6,8]
+\end{itemize}
+\end{block}
+\end{column}
+\end{columns}
+\vspace{0.3em}
+\rule{\textwidth}{0.4pt}
+\vspace{0.2em}
+\textbf{Tested on:} SNAP roadNet-CA (1.96M nodes) and amazon0302 (262K nodes) [9]. Correctness verified on every instance.
+\end{frame}
+
+% 10/10: REFERENCES
+\begin{frame}{References}
+\scriptsize
+\begin{enumerate}
+    \item T.~H.\ Cormen et al., \textit{Introduction to Algorithms}, 4th ed., MIT Press, 2022.
+    \item J.~B.\ Kruskal, ``On the shortest spanning subtree,'' \textit{Proc.\ AMS}, vol.~7, no.~1, 1956.
+    \item O.\ Bor\r{u}vka, ``O jist\'{e}m probl\'{e}mu minim\'{a}ln\'{i}m,'' 1926.
+    \item S.~M.\ Durbhakula, ``Parallel MST algorithms and evaluation,'' arXiv:2005.06913, 2020.
+    \item M.\ Schimek et al., ``Engineering massively parallel MST algorithms,'' arXiv:2302.12199, 2023.
+    \item S.\ Bhargava and J.\ Zaia, ``Parallelizing MST using Bor\r{u}vka's in ParlayLib and CUDA,'' CMU 15-618, 2023.
+    \item S.\ Dhouib, ``DM-MSTP,'' \textit{Results in Control and Optimization}, vol.~14, 2024.
+    \item A.\ Fallin et al., ``A high-performance MST implementation for GPUs,'' \textit{SC '23}, 2023.
+    \item J.\ Leskovec and A.\ Krevl, ``SNAP Datasets,'' \url{http://snap.stanford.edu/data}, 2014.
+    \item S.~K.\ Lam, A.\ Pitrou, and S.\ Seibert, ``Numba: A LLVM-based Python JIT compiler,'' \textit{Proc.\ LLVM-HPC}, 2015.
+\end{enumerate}
+\end{frame}
+
+\end{document}
