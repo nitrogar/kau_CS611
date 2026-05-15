@@ -99,18 +99,18 @@ def load_validation(path):
     return rows
 
 # ── Load everything ──
-py_road = load_csv('results/python/road/scalability_roadNet-CA.csv')
-py_amz  = load_csv('results/python/amazon/scalability_amazon0302.csv')
-py_road_sp = load_csv('results/python/road/speedup_roadNet-CA.csv')
-py_amz_sp  = load_csv('results/python/amazon/speedup_amazon0302.csv')
+py_road = load_csv('logs/python/roadNet-CA/scalability_roadNet-CA.csv')
+py_amz  = load_csv('logs/python/amazon0302/scalability_amazon0302.csv')
+py_road_sp = load_csv('logs/python/roadNet-CA/speedup_roadNet-CA.csv')
+py_amz_sp  = load_csv('logs/python/amazon0302/speedup_amazon0302.csv')
 
-rs_road = load_csv('results/rust/road/scalability_roadNet-CA.csv')
-rs_amz  = load_csv('results/rust/amazon/scalability_amazon0302.csv')
-rs_road_sp = load_csv('results/rust/road/speedup_roadNet-CA.csv')
-rs_amz_sp  = load_csv('results/rust/amazon/speedup_amazon0302.csv')
+rs_road = load_csv('logs/rust/roadNet-CA/scalability_roadNet-CA.csv')
+rs_amz  = load_csv('logs/rust/amazon0302/scalability_amazon0302.csv')
+rs_road_sp = load_csv('logs/rust/roadNet-CA/speedup_roadNet-CA.csv')
+rs_amz_sp  = load_csv('logs/rust/amazon0302/speedup_amazon0302.csv')
 
-val_road = load_validation('results/python/road/validation_roadNet-CA.csv')
-val_amz  = load_validation('results/python/amazon/validation_amazon0302.csv')
+val_road = load_validation('logs/python/roadNet-CA/validation_roadNet-CA.csv')
+val_amz  = load_validation('logs/python/amazon0302/validation_amazon0302.csv')
 
 print(f"Loaded data: {len(py_road)+len(py_amz)} Python rows, "
       f"{len(rs_road)+len(rs_amz)} Rust rows")

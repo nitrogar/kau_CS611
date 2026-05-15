@@ -31,8 +31,9 @@ AMAZON_SIZES="5000,10000,25000,50000,100000,0"
 ROAD_SIZES="50000,200000,500000,0"
 ORKUT_SIZES="50000,200000,500000,1000000,0"
 
-# Output
+# Output — each run gets a unique timestamped directory
 LOG_DIR="logs"
+RUN_ID=$(date +%Y-%m-%d_%H-%M-%S)
 
 # ─── Helpers ────────────────────────────────────────────────
 BOLD='\033[1m'
@@ -51,14 +52,13 @@ build_rust() {
 
 build_cpp() {
     header "Building C++ (release, -O2)"
-    # TODO: Update source file and output binary name as needed
-    g++ -O2 -o mst_cpp mst_cpp.cpp
+    g++ -O2 -std=c++17 -o mst_cpp mst_cpp.cpp
 }
 
 # ─── Rust Benchmarks ────────────────────────────────────────
 run_rust_amazon() {
     header "Rust: Amazon0302 (262K V, 900K E)"
-    local out="$LOG_DIR/rust/amazon0302"
+    local out="$LOG_DIR/rust/amazon0302/$RUN_ID"
     mkdir -p "$out"
     ./target/release/mst-bench \
         --dataset "$AMAZON" \
@@ -73,7 +73,7 @@ run_rust_amazon() {
 
 run_rust_road() {
     header "Rust: roadNet-CA (1.97M V, 2.77M E)"
-    local out="$LOG_DIR/rust/roadNet-CA"
+    local out="$LOG_DIR/rust/roadNet-CA/$RUN_ID"
     mkdir -p "$out"
     ./target/release/mst-bench \
         --dataset "$ROAD" \
@@ -88,7 +88,7 @@ run_rust_road() {
 
 run_rust_orkut() {
     header "Rust: com-Orkut (3.07M V, 117M E)"
-    local out="$LOG_DIR/rust/com-orkut"
+    local out="$LOG_DIR/rust/com-orkut/$RUN_ID"
     mkdir -p "$out"
     ./target/release/mst-bench \
         --dataset "$ORKUT" \
@@ -106,7 +106,7 @@ run_thread_scaling() {
     header "Rust: Thread Scaling on com-Orkut"
 
     # Sequential baseline
-    local out="$LOG_DIR/rust/com-orkut/threads/t1_seq"
+    local out="$LOG_DIR/rust/com-orkut/$RUN_ID/threads/t1_seq"
     mkdir -p "$out"
     echo "  → Sequential baseline (T=1)..."
     ./target/release/mst-bench \
@@ -120,7 +120,7 @@ run_thread_scaling() {
 
     # Parallel at each thread count
     for T in $THREAD_COUNTS; do
-        out="$LOG_DIR/rust/com-orkut/threads/t${T}"
+        out="$LOG_DIR/rust/com-orkut/$RUN_ID/threads/t${T}"
         mkdir -p "$out"
         echo "  → Pooled with T=$T threads..."
         ./target/release/mst-bench \
@@ -132,13 +132,13 @@ run_thread_scaling() {
             --runs "$RUNS" \
             --output-dir "$out"
     done
-    done_msg "$LOG_DIR/rust/com-orkut/threads/"
+    done_msg "$LOG_DIR/rust/com-orkut/$RUN_ID/threads/"
 }
 
 # ─── Python Benchmarks ──────────────────────────────────────
 run_python_amazon() {
     header "Python: Amazon0302"
-    local out="$LOG_DIR/python/amazon0302"
+    local out="$LOG_DIR/python/amazon0302/$RUN_ID"
     mkdir -p "$out"
     python3.12 mst_python.py \
         --dataset "$AMAZON" \
@@ -154,7 +154,7 @@ run_python_amazon() {
 
 run_python_road() {
     header "Python: roadNet-CA"
-    local out="$LOG_DIR/python/roadNet-CA"
+    local out="$LOG_DIR/python/roadNet-CA/$RUN_ID"
     mkdir -p "$out"
     python3.12 mst_python.py \
         --dataset "$ROAD" \
@@ -170,7 +170,7 @@ run_python_road() {
 
 run_python_orkut() {
     header "Python: com-Orkut (smaller sizes for speed)"
-    local out="$LOG_DIR/python/com-orkut"
+    local out="$LOG_DIR/python/com-orkut/$RUN_ID"
     mkdir -p "$out"
     python3.12 mst_python.py \
         --dataset "$ORKUT" \
@@ -184,33 +184,40 @@ run_python_orkut() {
     done_msg "$out"
 }
 
-# ─── C++ Benchmarks (placeholder) ───────────────────────────
-# TODO: Wire up your C++ MST implementation here.
-#       The binary should accept CLI args and output CSV results.
+# ─── C++ Benchmarks ─────────────────────────────────────────
 run_cpp_amazon() {
-    header "C++: Amazon0302"
-    local out="$LOG_DIR/cpp/amazon0302"
+    header "C++: Amazon0302 (Kruskal only)"
+    local out="$LOG_DIR/cpp/amazon0302/$RUN_ID"
     mkdir -p "$out"
-    # TODO: ./mst_cpp --dataset "$AMAZON" --max-nodes "$AMAZON_SIZES" --output "$out/scalability_amazon0302.csv"
-    echo "  ⚠ C++ benchmark not yet implemented"
+    ./mst_cpp \
+        --dataset "$AMAZON" \
+        --sizes "$AMAZON_SIZES" \
+        --runs "$RUNS" \
+        --output-dir "$out"
     done_msg "$out"
 }
 
 run_cpp_road() {
-    header "C++: roadNet-CA"
-    local out="$LOG_DIR/cpp/roadNet-CA"
+    header "C++: roadNet-CA (Kruskal only)"
+    local out="$LOG_DIR/cpp/roadNet-CA/$RUN_ID"
     mkdir -p "$out"
-    # TODO: ./mst_cpp --dataset "$ROAD" --max-nodes "$ROAD_SIZES" --output "$out/scalability_roadNet-CA.csv"
-    echo "  ⚠ C++ benchmark not yet implemented"
+    ./mst_cpp \
+        --dataset "$ROAD" \
+        --sizes "$ROAD_SIZES" \
+        --runs "$RUNS" \
+        --output-dir "$out"
     done_msg "$out"
 }
 
 run_cpp_orkut() {
-    header "C++: com-Orkut"
-    local out="$LOG_DIR/cpp/com-orkut"
+    header "C++: com-Orkut (Kruskal only)"
+    local out="$LOG_DIR/cpp/com-orkut/$RUN_ID"
     mkdir -p "$out"
-    # TODO: ./mst_cpp --dataset "$ORKUT" --max-nodes "$ORKUT_SIZES" --output "$out/scalability_com-orkut.csv"
-    echo "  ⚠ C++ benchmark not yet implemented"
+    ./mst_cpp \
+        --dataset "$ORKUT" \
+        --sizes "$ORKUT_SIZES" \
+        --runs "$RUNS" \
+        --output-dir "$out"
     done_msg "$out"
 }
 
