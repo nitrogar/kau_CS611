@@ -197,60 +197,127 @@ def boruvka_seq_numba(n, eu, ev, ew):
     return mst_weight, mst_count
 
 # ============================================================
+# Borůvka Sequential — NO CONTRACTION variant
+# Same as boruvka_seq_numba but NEVER removes intra-component
+# edges. Every round scans ALL original edges → O(E · log V).
+# ============================================================
+@njit
+def boruvka_seq_nc_numba(n, eu, ev, ew):
+    """Borůvka’s MST (sequential) WITHOUT graph contraction."""
+    parent, rank = uf_init(n)
+    mst_weight = np.int64(0)
+    mst_count = 0
+    m = len(eu)  # never changes — no contraction
+    cheapest_w = np.empty(n, dtype=np.int32)
+    cheapest_idx = np.empty(n, dtype=np.int32)
+    n_comp = n
+
+    while n_comp > 1:
+        cheapest_w[:] = np.iinfo(np.int32).max
+        cheapest_idx[:] = -1
+        found = False
+        for i in range(m):
+            cu = uf_find(parent, eu[i])
+            cv = uf_find(parent, ev[i])
+            if cu != cv:
+                w = ew[i]
+                if w < cheapest_w[cu]:
+                    cheapest_w[cu] = w
+                    cheapest_idx[cu] = i
+                if w < cheapest_w[cv]:
+                    cheapest_w[cv] = w
+                    cheapest_idx[cv] = i
+                found = True
+        if not found:
+            break
+
+        merged = 0
+        for c in range(n):
+            idx = cheapest_idx[c]
+            if idx >= 0:
+                u, v, w = eu[idx], ev[idx], ew[idx]
+                if uf_union(parent, rank, u, v):
+                    mst_weight += w
+                    mst_count += 1
+                    merged += 1
+        if merged == 0:
+            break
+        n_comp -= merged
+        # NO contraction phase — edge arrays stay at full size
+
+    return mst_weight, mst_count
+
+# ============================================================
 # Borůvka Parallel (Numba prange + contraction) [3,4]
-# The find-minimum phase is sequential (indexed reductions
-# are not race-free under prange). Parallelism is in the
-# comp-ID flattening and edge contraction phases, which are
-# embarrassingly parallel and shrink the edge set each round.
 # ============================================================
 @njit(parallel=True)
-def _build_comp_ids(parent, n):
-    """Parallel Phase: Flatten component IDs via path-splitting.
-    Input:  parent (int32[n]) — Union-Find parent array (mutated for compression)
-            n      (int)      — number of vertices
-    Output: comp   (int32[n]) — comp[i] = root representative of vertex i
-    Parallelism: each vertex independently walks to its root (prange over V).
+def _find_min_parallel(eu, ev, ew, comp_ids, m, n):
+    """Parallel find-minimum phase using chunked reduction.
+
+    Each chunk maintains LOCAL cheapest_w/cheapest_idx arrays to avoid
+    data races on shared arrays (prange over edges would let multiple
+    threads write to the same component slot simultaneously, causing
+    inconsistent weight/index pairs and incorrect MST results).
     """
+    nchunks = min(8, max(1, m // 2000))  # adaptive chunk count
+    chunk_sz = max(1, (m + nchunks - 1) // nchunks)
+    actual_chunks = min(nchunks, max(1, (m + chunk_sz - 1) // chunk_sz))
+
+    # Per-chunk local arrays: shape (actual_chunks, n)
+    all_w = np.full((actual_chunks, n), np.iinfo(np.int32).max, dtype=np.int32)
+    all_idx = np.full((actual_chunks, n), -1, dtype=np.int32)
+
+    for c in prange(actual_chunks):
+        lo = c * chunk_sz
+        hi = min(lo + chunk_sz, m)
+        for i in range(lo, hi):
+            cu = comp_ids[eu[i]]
+            cv = comp_ids[ev[i]]
+            if cu != cv:
+                w = ew[i]
+                if w < all_w[c, cu]:
+                    all_w[c, cu] = w
+                    all_idx[c, cu] = i
+                if w < all_w[c, cv]:
+                    all_w[c, cv] = w
+                    all_idx[c, cv] = i
+
+    # Merge per-chunk results (sequential — no races)
+    cheapest_w = np.full(n, np.iinfo(np.int32).max, dtype=np.int32)
+    cheapest_idx = np.full(n, -1, dtype=np.int32)
+    for c in range(actual_chunks):
+        for j in range(n):
+            if all_w[c, j] < cheapest_w[j]:
+                cheapest_w[j] = all_w[c, j]
+                cheapest_idx[j] = all_idx[c, j]
+    return cheapest_w, cheapest_idx
+
+@njit(parallel=True)
+def _build_comp_ids(parent, n):
+    """Parallel component ID flattening."""
     comp = np.empty(n, dtype=np.int32)
     for i in prange(n):
         x = i
         while parent[x] != x:
-            parent[x] = parent[parent[x]]  # path splitting
+            parent[x] = parent[parent[x]]
             x = parent[x]
         comp[i] = x
     return comp
 
 @njit(parallel=True)
-def _contract_edges_par(eu, ev, ew, comp_ids, m):
-    """Parallel Phase: Mark which edges cross component boundaries.
-    Input:  eu, ev   (int32[E]) — edge endpoint arrays
-            ew       (int32[E]) — edge weights (unused but passed for consistency)
-            comp_ids (int32[n]) — component ID of each vertex
-            m        (int)      — number of active edges
-    Output: keep     (bool[m])  — keep[i] = True if edge i connects two
-                                   different components (inter-component)
-    Parallelism: each edge independently checks its endpoints (prange over E).
-    """
+def _contract_edges(eu, ev, ew, parent, m):
+    """Parallel edge contraction: mark internal edges."""
     keep = np.empty(m, dtype=np.bool_)
     for i in prange(m):
-        keep[i] = (comp_ids[eu[i]] != comp_ids[ev[i]])
+        cu = uf_find(parent, eu[i])
+        cv = uf_find(parent, ev[i])
+        keep[i] = (cu != cv)
     return keep
 
 @njit
 def boruvka_par_numba(n, eu, ev, ew):
     """Borůvka's MST (partially parallel) — prange for comp-ID and contraction.
-    Input:  n  (int)       — number of vertices (0..n-1)
-            eu (int32[E])  — source vertex of each edge (MUTATED)
-            ev (int32[E])  — destination vertex of each edge (MUTATED)
-            ew (int32[E])  — weight of each edge (MUTATED)
-    Output: mst_weight (int64) — total weight of the MST
-            mst_count  (int)   — number of edges in the MST
-    
-    What's parallel vs sequential:
-      ✅ PARALLEL: comp-ID flattening (prange over V)  — _build_comp_ids
-      ❌ SEQUENTIAL: find-minimum (data race on cheapest_w[comp_id])
-      ❌ SEQUENTIAL: merge (Union-Find is inherently serial)
-      ✅ PARALLEL: edge contraction mask (prange over E) — _contract_edges_par
+    Find-minimum is sequential (avoids per-chunk allocation overhead).
     """
     parent, rank = uf_init(n)
     mst_weight = np.int64(0)
@@ -299,8 +366,7 @@ def boruvka_par_numba(n, eu, ev, ew):
         n_comp -= merged
 
         # Parallel: filter internal edges (contraction)
-        comp_ids2 = _build_comp_ids(parent, n)
-        keep = _contract_edges_par(eu, ev, ew, comp_ids2, m)
+        keep = _contract_edges(eu, ev, ew, parent, m)
         new_m = 0
         for i in range(m):
             if keep[i]:
@@ -311,6 +377,103 @@ def boruvka_par_numba(n, eu, ev, ew):
         m = new_m
 
     return mst_weight, mst_count
+
+# ============================================================
+# Borůvka Parallel — NO CONTRACTION variant
+# Parallel comp-ID flatten but scans ALL edges every round.
+# ============================================================
+@njit
+def boruvka_par_nc_numba(n, eu, ev, ew):
+    """Borůvka's MST (partially parallel) WITHOUT contraction."""
+    parent, rank = uf_init(n)
+    mst_weight = np.int64(0)
+    mst_count = 0
+    m = len(eu)  # never changes
+    n_comp = n
+
+    cheapest_w = np.empty(n, dtype=np.int32)
+    cheapest_idx = np.empty(n, dtype=np.int32)
+
+    while n_comp > 1:
+        comp_ids = _build_comp_ids(parent, n)
+
+        cheapest_w[:] = np.iinfo(np.int32).max
+        cheapest_idx[:] = -1
+        found = False
+        for i in range(m):
+            cu = comp_ids[eu[i]]
+            cv = comp_ids[ev[i]]
+            if cu != cv:
+                w = ew[i]
+                if w < cheapest_w[cu]:
+                    cheapest_w[cu] = w
+                    cheapest_idx[cu] = i
+                if w < cheapest_w[cv]:
+                    cheapest_w[cv] = w
+                    cheapest_idx[cv] = i
+                found = True
+        if not found:
+            break
+
+        merged = 0
+        for c in range(n):
+            idx = cheapest_idx[c]
+            if idx >= 0:
+                u, v, w = eu[idx], ev[idx], ew[idx]
+                if uf_union(parent, rank, u, v):
+                    mst_weight += w
+                    mst_count += 1
+                    merged += 1
+        if merged == 0:
+            break
+        n_comp -= merged
+        # NO contraction — edge arrays untouched
+
+    return mst_weight, mst_count
+
+
+# ============================================================
+# Borůvka Parallel Fold-Reduce (experimental)
+# Uses _find_min_parallel for fully parallel find-min.
+# ============================================================
+@njit
+def boruvka_par_fr_numba(n, eu, ev, ew):
+    """Borůvka's MST with parallel find-min via prange (fold-reduce style)."""
+    parent, rank = uf_init(n)
+    mst_weight = np.int64(0)
+    mst_count = 0
+    m = len(eu)
+    n_comp = n
+
+    while n_comp > 1:
+        comp_ids = _build_comp_ids(parent, n)
+        cheapest_w, cheapest_idx = _find_min_parallel(eu, ev, ew, comp_ids, m, n)
+
+        merged = 0
+        for c in range(n):
+            idx = cheapest_idx[c]
+            if idx >= 0:
+                u, v, w = eu[idx], ev[idx], ew[idx]
+                if uf_union(parent, rank, u, v):
+                    mst_weight += w
+                    mst_count += 1
+                    merged += 1
+        if merged == 0:
+            break
+        n_comp -= merged
+
+        keep = _contract_edges(eu, ev, ew, parent, m)
+        new_m = 0
+        for i in range(m):
+            if keep[i]:
+                eu[new_m] = eu[i]
+                ev[new_m] = ev[i]
+                ew[new_m] = ew[i]
+                new_m += 1
+        m = new_m
+
+    return mst_weight, mst_count
+
 
 # ============================================================
 # Borůvka "Pooled" Parallel — Reduced-overhead variant
@@ -550,6 +713,9 @@ def warmup_jit():
     kruskal_numba(10, _eu.copy(), _ev.copy(), _ew.copy())
     boruvka_seq_numba(10, _eu.copy(), _ev.copy(), _ew.copy())
     boruvka_par_numba(10, _eu.copy(), _ev.copy(), _ew.copy())
+    boruvka_seq_nc_numba(10, _eu.copy(), _ev.copy(), _ew.copy())
+    boruvka_par_nc_numba(10, _eu.copy(), _ev.copy(), _ew.copy())
+    boruvka_par_fr_numba(10, _eu.copy(), _ev.copy(), _ew.copy())
     boruvka_pooled_numba(10, _eu.copy(), _ev.copy(), _ew.copy())
     boruvka_groups_numba(10, _eu.copy(), _ev.copy(), _ew.copy())
     print("JIT warmup done.\n")
@@ -708,7 +874,10 @@ def networkx_kruskal_wrapper(n, eu, ev, ew):
 ALGORITHMS = {
     'kruskal': ('Kruskal (Seq)', kruskal_numba),
     'boruvka_seq': ('Borůvka (Seq)', boruvka_seq_numba),
+    'boruvka_seq_nc': ('Borůvka (Seq, No Contraction)', boruvka_seq_nc_numba),
     'boruvka_par': ('Borůvka (Par)', boruvka_par_numba),
+    'boruvka_par_nc': ('Borůvka (Par, No Contraction)', boruvka_par_nc_numba),
+    'boruvka_par_fr': ('Borůvka (Par, Fold-Reduce)', boruvka_par_fr_numba),
     'boruvka_pooled': ('Borůvka (Pooled)', boruvka_pooled_numba),
     'boruvka_groups': ('Borůvka (Groups)', boruvka_groups_numba),
     'networkx': ('NetworkX (Kruskal)', networkx_kruskal_wrapper),

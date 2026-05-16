@@ -16,10 +16,11 @@ set -x  # Print each command before execution
 
 # ─── Configuration ──────────────────────────────────────────
 RUNS=3
-NUM_THREADS=24
-ALGORITHMS="kruskal,boruvka_seq,boruvka_par,boruvka_pooled,boruvka_groups,petgraph"
-PYTHON_ALGORITHMS="kruskal,boruvka_seq,boruvka_par,boruvka_pooled,boruvka_groups,networkx"
-THREAD_COUNTS="2 4 8 16"
+NUM_THREADS=8
+RUST_ALGORITHMS="kruskal,boruvka_seq,boruvka_seq_nc,boruvka_par,boruvka_par_nc" #,boruvka_par_fr,boruvka_pooled,boruvka_groups,petgraph"
+PYTHON_ALGORITHMS="kruskal,boruvka_seq,boruvka_seq_nc,boruvka_par,boruvka_par_nc" #,boruvka_par_fr,boruvka_pooled,boruvka_groups,networkx"
+CPP_ALGORITHMS="kruskal,boruvka_seq,boruvka_par"
+THREAD_COUNTS="2,4,8,12,16"
 
 # Datasets
 AMAZON="datasets/amazon0302.txt"
@@ -32,8 +33,10 @@ ROAD_SIZES="50000,200000,500000,0"
 ORKUT_SIZES="50000,200000,500000,1000000,0"
 
 # Output — each run gets a unique timestamped directory
+# Structure: logs/<RUN_ID>/{rust,python,cpp,figures}/<dataset>/
 LOG_DIR="logs"
 RUN_ID=$(date +%Y-%m-%d_%H-%M-%S)
+RUN_DIR="$LOG_DIR/$RUN_ID"
 
 # ─── Helpers ────────────────────────────────────────────────
 BOLD='\033[1m'
@@ -46,26 +49,29 @@ done_msg() { echo -e "${GREEN}  ✓ Done → $1${RESET}"; }
 
 # ─── Build ──────────────────────────────────────────────────
 build_rust() {
-    header "Building Rust (release, native CPU)"
+    header "Building Rust (clean + release, native CPU)"
+    cargo clean 2>&1 | tail -1
     RUSTFLAGS="-C target-cpu=native" cargo build --release 2>&1 | tail -2
 }
 
 build_cpp() {
-    header "Building C++ (release, -O2)"
-    g++ -O2 -std=c++17 -o mst_cpp mst_cpp.cpp
+    header "Building C++ (clean + release, -O2)"
+    rm -f mst_cpp
+    g++ -O2 -std=c++17 -pthread -o mst_cpp mst_cpp.cpp
 }
 
 # ─── Rust Benchmarks ────────────────────────────────────────
 run_rust_amazon() {
     header "Rust: Amazon0302 (262K V, 900K E)"
-    local out="$LOG_DIR/rust/amazon0302/$RUN_ID"
+    local out="$RUN_DIR/rust/amazon0302"
     mkdir -p "$out"
     ./target/release/mst-bench \
         --dataset "$AMAZON" \
         --sizes "$AMAZON_SIZES" \
-        --algorithms "$ALGORITHMS" \
+        --threads "$THREAD_COUNTS" \
+        --algorithms "$RUST_ALGORITHMS" \
         --num-threads "$NUM_THREADS" \
-        --experiment scalability \
+        --experiment both \
         --runs "$RUNS" \
         --output-dir "$out"
     done_msg "$out"
@@ -73,14 +79,15 @@ run_rust_amazon() {
 
 run_rust_road() {
     header "Rust: roadNet-CA (1.97M V, 2.77M E)"
-    local out="$LOG_DIR/rust/roadNet-CA/$RUN_ID"
+    local out="$RUN_DIR/rust/roadNet-CA"
     mkdir -p "$out"
     ./target/release/mst-bench \
         --dataset "$ROAD" \
         --sizes "$ROAD_SIZES" \
-        --algorithms "$ALGORITHMS" \
+        --threads "$THREAD_COUNTS" \
+        --algorithms "$RUST_ALGORITHMS" \
         --num-threads "$NUM_THREADS" \
-        --experiment scalability \
+        --experiment both \
         --runs "$RUNS" \
         --output-dir "$out"
     done_msg "$out"
@@ -88,14 +95,15 @@ run_rust_road() {
 
 run_rust_orkut() {
     header "Rust: com-Orkut (3.07M V, 117M E)"
-    local out="$LOG_DIR/rust/com-orkut/$RUN_ID"
+    local out="$RUN_DIR/rust/com-orkut"
     mkdir -p "$out"
     ./target/release/mst-bench \
         --dataset "$ORKUT" \
         --sizes "$ORKUT_SIZES" \
-        --algorithms "$ALGORITHMS" \
+        --threads "$THREAD_COUNTS" \
+        --algorithms "$RUST_ALGORITHMS" \
         --num-threads "$NUM_THREADS" \
-        --experiment scalability \
+        --experiment both \
         --runs "$RUNS" \
         --output-dir "$out"
     done_msg "$out"
@@ -106,7 +114,7 @@ run_thread_scaling() {
     header "Rust: Thread Scaling on com-Orkut"
 
     # Sequential baseline
-    local out="$LOG_DIR/rust/com-orkut/$RUN_ID/threads/t1_seq"
+    local out="$RUN_DIR/rust/com-orkut/threads/t1_seq"
     mkdir -p "$out"
     echo "  → Sequential baseline (T=1)..."
     ./target/release/mst-bench \
@@ -119,33 +127,34 @@ run_thread_scaling() {
         --output-dir "$out"
 
     # Parallel at each thread count
-    for T in $THREAD_COUNTS; do
-        out="$LOG_DIR/rust/com-orkut/$RUN_ID/threads/t${T}"
+    for T in ${THREAD_COUNTS//,/ }; do
+        out="$RUN_DIR/rust/com-orkut/threads/t${T}"
         mkdir -p "$out"
-        echo "  → Pooled with T=$T threads..."
+        echo "  → Par with T=$T threads..."
         ./target/release/mst-bench \
             --dataset "$ORKUT" \
             --sizes "$ORKUT_SIZES" \
-            --algorithms boruvka_pooled \
+            --algorithms boruvka_par \
             --num-threads "$T" \
             --experiment scalability \
             --runs "$RUNS" \
             --output-dir "$out"
     done
-    done_msg "$LOG_DIR/rust/com-orkut/$RUN_ID/threads/"
+    done_msg "$RUN_DIR/rust/com-orkut/threads/"
 }
 
 # ─── Python Benchmarks ──────────────────────────────────────
 run_python_amazon() {
     header "Python: Amazon0302"
-    local out="$LOG_DIR/python/amazon0302/$RUN_ID"
+    local out="$RUN_DIR/python/amazon0302"
     mkdir -p "$out"
     python3.12 mst_python.py \
         --dataset "$AMAZON" \
         --sizes "$AMAZON_SIZES" \
+        --threads "$THREAD_COUNTS" \
         --algorithms "$PYTHON_ALGORITHMS" \
         --default-threads "$NUM_THREADS" \
-        --experiment scalability \
+        --experiment both \
         --runs "$RUNS" \
         --output-dir "$out" \
         --no-plot
@@ -154,14 +163,15 @@ run_python_amazon() {
 
 run_python_road() {
     header "Python: roadNet-CA"
-    local out="$LOG_DIR/python/roadNet-CA/$RUN_ID"
+    local out="$RUN_DIR/python/roadNet-CA"
     mkdir -p "$out"
     python3.12 mst_python.py \
         --dataset "$ROAD" \
         --sizes "$ROAD_SIZES" \
+        --threads "$THREAD_COUNTS" \
         --algorithms "$PYTHON_ALGORITHMS" \
         --default-threads "$NUM_THREADS" \
-        --experiment scalability \
+        --experiment both \
         --runs "$RUNS" \
         --output-dir "$out" \
         --no-plot
@@ -170,14 +180,15 @@ run_python_road() {
 
 run_python_orkut() {
     header "Python: com-Orkut (smaller sizes for speed)"
-    local out="$LOG_DIR/python/com-orkut/$RUN_ID"
+    local out="$RUN_DIR/python/com-orkut"
     mkdir -p "$out"
     python3.12 mst_python.py \
         --dataset "$ORKUT" \
         --sizes "50000,200000,500000" \
+        --threads "$THREAD_COUNTS" \
         --algorithms "$PYTHON_ALGORITHMS" \
         --default-threads "$NUM_THREADS" \
-        --experiment scalability \
+        --experiment both \
         --runs "$RUNS" \
         --output-dir "$out" \
         --no-validate --no-plot
@@ -186,39 +197,49 @@ run_python_orkut() {
 
 # ─── C++ Benchmarks ─────────────────────────────────────────
 run_cpp_amazon() {
-    header "C++: Amazon0302 (Kruskal only)"
-    local out="$LOG_DIR/cpp/amazon0302/$RUN_ID"
+    header "C++: Amazon0302 (Kruskal + Borůvka-Seq)"
+    local out="$RUN_DIR/cpp/amazon0302"
     mkdir -p "$out"
     ./mst_cpp \
         --dataset "$AMAZON" \
         --sizes "$AMAZON_SIZES" \
+        --algorithms "$CPP_ALGORITHMS" \
         --runs "$RUNS" \
         --output-dir "$out"
     done_msg "$out"
 }
 
 run_cpp_road() {
-    header "C++: roadNet-CA (Kruskal only)"
-    local out="$LOG_DIR/cpp/roadNet-CA/$RUN_ID"
+    header "C++: roadNet-CA (Kruskal + Borůvka-Seq)"
+    local out="$RUN_DIR/cpp/roadNet-CA"
     mkdir -p "$out"
     ./mst_cpp \
         --dataset "$ROAD" \
         --sizes "$ROAD_SIZES" \
+        --algorithms "$CPP_ALGORITHMS" \
         --runs "$RUNS" \
         --output-dir "$out"
     done_msg "$out"
 }
 
 run_cpp_orkut() {
-    header "C++: com-Orkut (Kruskal only)"
-    local out="$LOG_DIR/cpp/com-orkut/$RUN_ID"
+    header "C++: com-Orkut (Kruskal + Borůvka-Seq)"
+    local out="$RUN_DIR/cpp/com-orkut"
     mkdir -p "$out"
     ./mst_cpp \
         --dataset "$ORKUT" \
         --sizes "$ORKUT_SIZES" \
+        --algorithms "$CPP_ALGORITHMS" \
         --runs "$RUNS" \
         --output-dir "$out"
     done_msg "$out"
+}
+
+# ─── Plot Generation ────────────────────────────────────────
+generate_plots() {
+    header "Generating Plots (run: $RUN_ID)"
+    python3.12 generate_plots.py --run-id "$RUN_ID"
+    done_msg "$RUN_DIR/figures/"
 }
 
 # ─── Main ───────────────────────────────────────────────────
@@ -271,9 +292,22 @@ case "$MODE" in
         run_python_amazon
         run_python_road
         run_python_orkut
+        generate_plots
+        ;;
+    plots)
+        # Use latest existing run, not the new empty RUN_ID
+        LATEST=$(ls -dt logs/????-??-??_??-??-?? 2>/dev/null | head -1)
+        if [ -z "$LATEST" ]; then
+            echo "ERROR: No existing run directories found in logs/"
+            exit 1
+        fi
+        RUN_ID=$(basename "$LATEST")
+        RUN_DIR="$LOG_DIR/$RUN_ID"
+        echo "Using latest run: $RUN_DIR"
+        generate_plots
         ;;
     *)
-        echo "Usage: $0 [rust|python|cpp|threads|all] [amazon|road|orkut]"
+        echo "Usage: $0 [rust|python|cpp|threads|plots|all] [amazon|road|orkut]"
         exit 1
         ;;
 esac

@@ -117,35 +117,27 @@ impl EdgeArrays {
 // ============================================================
 fn kruskal(n: usize, edges: &EdgeArrays) -> (i64, usize) {
     let m = edges.len();
-    // Step 1: Sort edge indices by weight — O(E log E), the bottleneck
-    // Uses pdqsort (pattern-defeating quicksort) via sort_unstable
-    let mut order: Vec<usize> = (0..m).collect();
-    order.sort_unstable_by_key(|&i| edges.ew[i]);
+    // Step 1: Build a sortable edge array (u, v, w) and sort by weight
+    // Direct sort avoids cache misses from indirect index lookups
+    let mut sorted: Vec<(i32, i32, i32)> = (0..m)
+        .map(|i| (edges.ew[i], edges.eu[i], edges.ev[i]))
+        .collect();
+    sorted.sort_unstable();
 
     let mut uf = UnionFind::new(n);
     let mut mst_weight: i64 = 0;
     let mut mst_count: usize = 0;
 
     // Step 2: Greedy selection — O(E · α(n)) ≈ O(E)
-    for &i in &order {
-        let u = edges.eu[i];   // u = source vertex of edge i
-        let v = edges.ev[i];   // v = destination vertex of edge i
-        let w = edges.ew[i];   // w = weight (cost) of edge i
-        // Check if u and v are in different components (adding this edge won't create a cycle)
+    for &(w, u, v) in &sorted {
         if uf.find(u) != uf.find(v) {
-            // union(u, v): merge the two components containing u and v into one.
-            // This means u and v are now "connected" in our growing MST.
-            // Returns true because they were in different components.
             uf.union(u, v);
-            mst_weight += w as i64;  // add this edge's cost to MST total
-            mst_count += 1;          // one more edge in our MST
-            // Step 3: Early termination — a tree with n vertices has exactly n-1 edges
+            mst_weight += w as i64;
+            mst_count += 1;
             if mst_count == n - 1 {
                 break;
             }
         }
-        // If u and v are already in the same component, skip this edge —
-        // adding it would create a cycle, which is not allowed in a tree.
     }
     (mst_weight, mst_count)
 }
@@ -248,21 +240,76 @@ fn boruvka_seq(n: usize, edges: &EdgeArrays) -> (i64, usize) {
     (mst_weight, mst_count)
 }
 
-// Borůvka Parallel (Rayon + contraction) [3,4]
-// SIMD-friendly: contiguous i32 arrays processed in parallel chunks.
-// Uses explicit chunking with pre-allocated buffers per thread to avoid
-// allocation overhead in the fold/reduce pattern.
 // ============================================================
-fn boruvka_par(n: usize, edges: &EdgeArrays) -> (i64, usize) {
+// Borůvka Sequential — NO CONTRACTION variant
+// Same algorithm, but NEVER removes intra-component edges.
+// Every round scans ALL original edges → O(E · log V) total work.
+// This demonstrates why contraction is essential for performance.
+// ============================================================
+fn boruvka_seq_nc(n: usize, edges: &EdgeArrays) -> (i64, usize) {
+    let mut uf = UnionFind::new(n);
+    let mut mst_weight: i64 = 0;
+    let mut mst_count: usize = 0;
+    let m = edges.len();  // never changes — no contraction
+    let mut n_comp = n;
+
+    let mut cheapest_w = vec![i32::MAX; n];
+    let mut cheapest_idx: Vec<i32> = vec![-1; n];
+
+    while n_comp > 1 {
+        // Phase 1: Find-Min (scan ALL original edges every round)
+        cheapest_w.iter_mut().for_each(|x| *x = i32::MAX);
+        cheapest_idx.iter_mut().for_each(|x| *x = -1);
+
+        let mut found = false;
+        for i in 0..m {
+            let cu = uf.find(edges.eu[i]);
+            let cv = uf.find(edges.ev[i]);
+            if cu != cv {
+                let w = edges.ew[i];
+                if w < cheapest_w[cu as usize] {
+                    cheapest_w[cu as usize] = w;
+                    cheapest_idx[cu as usize] = i as i32;
+                }
+                if w < cheapest_w[cv as usize] {
+                    cheapest_w[cv as usize] = w;
+                    cheapest_idx[cv as usize] = i as i32;
+                }
+                found = true;
+            }
+        }
+        if !found { break; }
+
+        // Phase 2: Merge
+        let mut merged = 0usize;
+        for c in 0..n {
+            let idx = cheapest_idx[c];
+            if idx >= 0 {
+                let i = idx as usize;
+                if uf.union(edges.eu[i], edges.ev[i]) {
+                    mst_weight += edges.ew[i] as i64;
+                    mst_count += 1;
+                    merged += 1;
+                }
+            }
+        }
+        if merged == 0 { break; }
+        n_comp -= merged;
+        // NO Phase 3 — no contraction, edge set stays at full size
+    }
+    (mst_weight, mst_count)
+}
+
+// ============================================================
+// Borůvka Parallel — NO CONTRACTION variant
+// Parallel comp-ID flatten, but scans ALL edges every round.
+// ============================================================
+fn boruvka_par_nc(n: usize, edges: &EdgeArrays) -> (i64, usize) {
     let mut parent: Vec<i32> = (0..n as i32).collect();
     let mut rank: Vec<i32> = vec![0; n];
     let mut mst_weight: i64 = 0;
     let mut mst_count: usize = 0;
-
-    let mut eu = edges.eu.clone();
-    let mut ev = edges.ev.clone();
-    let mut ew = edges.ew.clone();
-    let mut m = eu.len();
+    let m = edges.len();  // never changes
     let mut n_comp = n;
 
     let mut cheapest_w = vec![i32::MAX; n];
@@ -281,9 +328,88 @@ fn boruvka_par(n: usize, edges: &EdgeArrays) -> (i64, usize) {
             })
             .collect();
 
-        // Sequential find-minimum (avoids allocation overhead for thread-local
-        // arrays which dominates at small-medium graph sizes). The edge set
-        // shrinks each round via contraction, so this is fast.
+        // Sequential find-minimum over ALL original edges
+        cheapest_w.iter_mut().for_each(|x| *x = i32::MAX);
+        cheapest_idx.iter_mut().for_each(|x| *x = -1);
+
+        let mut found = false;
+        for i in 0..m {
+            let cu = comp_ids[edges.eu[i] as usize] as usize;
+            let cv = comp_ids[edges.ev[i] as usize] as usize;
+            if cu != cv {
+                let w = edges.ew[i];
+                if w < cheapest_w[cu] {
+                    cheapest_w[cu] = w;
+                    cheapest_idx[cu] = i as i32;
+                }
+                if w < cheapest_w[cv] {
+                    cheapest_w[cv] = w;
+                    cheapest_idx[cv] = i as i32;
+                }
+                found = true;
+            }
+        }
+        if !found { break; }
+
+        // Serial merge
+        let mut merged = 0usize;
+        let mut uf_local = UnionFind { parent: parent.clone(), rank: rank.clone() };
+        for c in 0..n {
+            let idx = cheapest_idx[c];
+            if idx >= 0 {
+                let i = idx as usize;
+                if uf_local.union(edges.eu[i], edges.ev[i]) {
+                    mst_weight += edges.ew[i] as i64;
+                    mst_count += 1;
+                    merged += 1;
+                }
+            }
+        }
+        parent = uf_local.parent;
+        rank = uf_local.rank;
+        if merged == 0 { break; }
+        n_comp -= merged;
+    }
+    (mst_weight, mst_count)
+}
+
+// Borůvka Parallel (Rayon + contraction) [3,4]
+// Parallel comp-ID flatten + parallel edge contraction.
+// Find-minimum is sequential (avoids per-chunk allocation overhead).
+// ============================================================
+fn boruvka_par(n: usize, edges: &EdgeArrays) -> (i64, usize) {
+    let mut parent: Vec<i32> = (0..n as i32).collect();
+    let mut rank: Vec<i32> = vec![0; n];
+    let mut mst_weight: i64 = 0;
+    let mut mst_count: usize = 0;
+
+    let mut eu = edges.eu.clone();
+    let mut ev = edges.ev.clone();
+    let mut ew = edges.ew.clone();
+    let mut m = eu.len();
+    let mut n_comp = n;
+
+    // Pre-allocate reusable buffers (Fix 4: avoid per-round allocations)
+    let mut cheapest_w = vec![i32::MAX; n];
+    let mut cheapest_idx: Vec<i32> = vec![-1; n];
+    let mut comp_ids: Vec<i32> = vec![0; n];
+
+    while n_comp > 1 {
+        // Parallel: flatten component IDs (reuse buffer)
+        comp_ids.par_iter_mut().enumerate().for_each(|(i, cid)| {
+            let mut x = i as i32;
+            unsafe {
+                // SAFETY: parent indices are always in 0..n, no data race
+                // because each element only reads from parent (immutable during this phase)
+                let p = parent.as_ptr();
+                while *p.add(x as usize) != x {
+                    x = *p.add(*p.add(x as usize) as usize);
+                }
+            }
+            *cid = x;
+        });
+
+        // Sequential find-minimum (fast: no per-chunk allocation)
         cheapest_w.iter_mut().for_each(|x| *x = i32::MAX);
         cheapest_idx.iter_mut().for_each(|x| *x = -1);
 
@@ -308,15 +434,152 @@ fn boruvka_par(n: usize, edges: &EdgeArrays) -> (i64, usize) {
             break;
         }
 
-        // Serial merge phase
+        // Serial merge phase (Fix 3: no UnionFind clone — inline find + union)
+        let mut merged = 0usize;
+        for c in 0..n {
+            let idx = cheapest_idx[c];
+            if idx >= 0 {
+                let i = idx as usize;
+                let u = eu[i];
+                let v = ev[i];
+                // Inline find with path splitting
+                let mut ru = u;
+                while parent[ru as usize] != ru {
+                    let gp = parent[parent[ru as usize] as usize];
+                    parent[ru as usize] = gp;
+                    ru = gp;
+                }
+                let mut rv = v;
+                while parent[rv as usize] != rv {
+                    let gp = parent[parent[rv as usize] as usize];
+                    parent[rv as usize] = gp;
+                    rv = gp;
+                }
+                // Inline union by rank
+                if ru != rv {
+                    if rank[ru as usize] < rank[rv as usize] {
+                        std::mem::swap(&mut ru, &mut rv);
+                    }
+                    parent[rv as usize] = ru;
+                    if rank[ru as usize] == rank[rv as usize] {
+                        rank[ru as usize] += 1;
+                    }
+                    mst_weight += ew[i] as i64;
+                    mst_count += 1;
+                    merged += 1;
+                }
+            }
+        }
+
+        if merged == 0 {
+            break;
+        }
+        n_comp -= merged;
+
+        // Parallel edge contraction (in-place compaction, no keep mask alloc)
+        // Use comp_ids as a read-only snapshot of parent roots for filtering
+        comp_ids.par_iter_mut().enumerate().for_each(|(i, cid)| {
+            let mut x = i as i32;
+            unsafe {
+                let p = parent.as_ptr();
+                while *p.add(x as usize) != x {
+                    x = *p.add(*p.add(x as usize) as usize);
+                }
+            }
+            *cid = x;
+        });
+
+        let mut new_m = 0usize;
+        for i in 0..m {
+            if comp_ids[eu[i] as usize] != comp_ids[ev[i] as usize] {
+                eu[new_m] = eu[i];
+                ev[new_m] = ev[i];
+                ew[new_m] = ew[i];
+                new_m += 1;
+            }
+        }
+        m = new_m;
+    }
+    (mst_weight, mst_count)
+}
+
+// ============================================================
+// Borůvka Parallel Fold-Reduce (experimental)
+// Uses Rayon fold/reduce for find-minimum — fully parallel but
+// allocates per-chunk Vec<i32; n> arrays which adds overhead.
+// ============================================================
+fn boruvka_par_fr(n: usize, edges: &EdgeArrays) -> (i64, usize) {
+    let mut parent: Vec<i32> = (0..n as i32).collect();
+    let mut rank: Vec<i32> = vec![0; n];
+    let mut mst_weight: i64 = 0;
+    let mut mst_count: usize = 0;
+
+    let mut eu = edges.eu.clone();
+    let mut ev = edges.ev.clone();
+    let mut ew = edges.ew.clone();
+    let mut m = eu.len();
+    let mut n_comp = n;
+
+    while n_comp > 1 {
+        // Parallel: flatten component IDs
+        let comp_ids: Vec<i32> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut x = i as i32;
+                while parent[x as usize] != x {
+                    x = parent[parent[x as usize] as usize];
+                }
+                x
+            })
+            .collect();
+
+        // Parallel find-minimum via fold/reduce
+        let (_final_w, final_idx) = (0..m)
+            .into_par_iter()
+            .fold(
+                || (vec![i32::MAX; n], vec![-1i32; n]),
+                |(mut local_w, mut local_idx), i| {
+                    let cu = comp_ids[eu[i] as usize] as usize;
+                    let cv = comp_ids[ev[i] as usize] as usize;
+                    if cu != cv {
+                        let w = ew[i];
+                        if w < local_w[cu] {
+                            local_w[cu] = w;
+                            local_idx[cu] = i as i32;
+                        }
+                        if w < local_w[cv] {
+                            local_w[cv] = w;
+                            local_idx[cv] = i as i32;
+                        }
+                    }
+                    (local_w, local_idx)
+                },
+            )
+            .reduce(
+                || (vec![i32::MAX; n], vec![-1i32; n]),
+                |(mut a_w, mut a_idx), (b_w, b_idx)| {
+                    for c in 0..n {
+                        if b_w[c] < a_w[c] {
+                            a_w[c] = b_w[c];
+                            a_idx[c] = b_idx[c];
+                        }
+                    }
+                    (a_w, a_idx)
+                },
+            );
+
+        if !final_idx.iter().any(|&x| x >= 0) {
+            break;
+        }
+
+        // Serial merge
         let mut merged = 0usize;
         let mut uf_local = UnionFind {
             parent: parent.clone(),
             rank: rank.clone(),
         };
-
         for c in 0..n {
-            let idx = cheapest_idx[c];
+            let idx = final_idx[c];
             if idx >= 0 {
                 let i = idx as usize;
                 if uf_local.union(eu[i], ev[i]) {
@@ -328,13 +591,12 @@ fn boruvka_par(n: usize, edges: &EdgeArrays) -> (i64, usize) {
         }
         parent = uf_local.parent;
         rank = uf_local.rank;
-
         if merged == 0 {
             break;
         }
         n_comp -= merged;
 
-        // Parallel: compute keep mask for edge contraction
+        // Parallel contraction
         let keep: Vec<bool> = eu[..m]
             .par_iter()
             .zip(ev[..m].par_iter())
@@ -351,7 +613,6 @@ fn boruvka_par(n: usize, edges: &EdgeArrays) -> (i64, usize) {
             })
             .collect();
 
-        // Compact (serial, but simple memcpy-like)
         let mut new_m = 0usize;
         for i in 0..m {
             if keep[i] {
@@ -970,15 +1231,17 @@ fn main() {
                 // Thread pool already configured globally at startup via --num-threads
 
                 for _r in 0..cli.runs {
-                    let e = edges.clone();
                     let t0 = Instant::now();
                     let (w, _) = match algo {
-                        "kruskal" => kruskal(n, &e),
-                        "boruvka_seq" => boruvka_seq(n, &e),
-                        "boruvka_par" => boruvka_par(n, &e),
-                        "boruvka_pooled" => boruvka_pooled(n, &e),
-                        "boruvka_groups" => boruvka_groups(n, &e),
-                        "petgraph" => petgraph_kruskal(n, &e),
+                        "kruskal" => kruskal(n, &edges),
+                        "boruvka_seq" => boruvka_seq(n, &edges),
+                        "boruvka_seq_nc" => boruvka_seq_nc(n, &edges),
+                        "boruvka_par" => boruvka_par(n, &edges),
+                        "boruvka_par_nc" => boruvka_par_nc(n, &edges),
+                        "boruvka_par_fr" => boruvka_par_fr(n, &edges),
+                        "boruvka_pooled" => boruvka_pooled(n, &edges),
+                        "boruvka_groups" => boruvka_groups(n, &edges),
+                        "petgraph" => petgraph_kruskal(n, &edges),
                         _ => panic!("Unknown algorithm: {algo}"),
                     };
                     let elapsed = t0.elapsed().as_secs_f64();
@@ -1009,7 +1272,10 @@ fn main() {
                 let algo_label = match algo {
                     "kruskal" => "Kruskal (Seq)",
                     "boruvka_seq" => "Borůvka (Seq)",
+                    "boruvka_seq_nc" => "Borůvka (Seq, No Contraction)",
                     "boruvka_par" => "Borůvka (Par)",
+                    "boruvka_par_nc" => "Borůvka (Par, No Contraction)",
+                    "boruvka_par_fr" => "Borůvka (Par, Fold-Reduce)",
                     "boruvka_pooled" => "Borůvka (Pooled)",
                     "boruvka_groups" => "Borůvka (Groups)",
                     "petgraph" => "Petgraph (Kruskal)",
@@ -1038,9 +1304,8 @@ fn main() {
             // Sequential baseline
             let mut seq_times = Vec::new();
             for _ in 0..cli.runs {
-                let e = edges.clone();
                 let t0 = Instant::now();
-                boruvka_seq(n, &e);
+                boruvka_seq(n, &edges);
                 seq_times.push(t0.elapsed().as_secs_f64());
             }
             let seq_med = median(&seq_times);
@@ -1052,9 +1317,8 @@ fn main() {
                 let mut last_w: i64 = 0;
 
                 for _r in 0..cli.runs {
-                    let e = edges.clone();
                     let t0 = Instant::now();
-                    let (w, _) = pool.install(|| boruvka_par(n, &e));
+                    let (w, _) = pool.install(|| boruvka_par(n, &edges));
                     let elapsed = t0.elapsed().as_secs_f64();
                     par_times.push(elapsed);
                     last_w = w;

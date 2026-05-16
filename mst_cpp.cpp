@@ -13,6 +13,9 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <set>
+#include <thread>
+#include <mutex>
 
 #define MAX_NODES 5000
 using namespace std;
@@ -24,8 +27,7 @@ struct Edge {
 
   // Comparision for sorting to sort in manner of non-decreasing order
   bool operator<(const Edge &second) const {
-    return w < second.w; // w is the current w of current edge vector, second.w
-                         // is the weight of the next vector
+    return w < second.w;
   }
 };
 
@@ -37,8 +39,7 @@ int find(int i, vector<int> &parent) {
   if (parent[i] == i) {
     return i;
   }
-  return parent[i] = find(parent[i],
-                          parent); // recursive search if parent is not the root
+  return parent[i] = find(parent[i], parent);
 }
 
 /// @brief it is union function used to set unin and check for cyclicity
@@ -99,8 +100,223 @@ double compute_std(const vector<double> &v, double mean) {
   return sqrt(sum_sq / v.size());
 }
 
+// ============================================================
+// Kruskal's Algorithm (Sequential)
+// Returns: (mst_weight, elapsed_seconds)
+// ============================================================
+pair<long long, double> run_kruskal(const vector<Edge> &edges, int n) {
+  vector<int> parent(n);
+  vector<int> rank(n, 0);
+  for (int i = 0; i < n; i++) parent[i] = i;
+
+  // Copy edges for sorting (preserves original for other algorithms)
+  vector<Edge> edges_copy = edges;
+
+  // Timer covers sort + MST (matches Rust/Python timing)
+  auto t_start = chrono::high_resolution_clock::now();
+  sort(edges_copy.begin(), edges_copy.end());
+
+  vector<Edge> mst;
+  int edges_num = 0;
+
+  for (size_t i = 0; i < edges_copy.size(); i++) {
+    const Edge &edge = edges_copy[i];
+    if (unionfunction(edge.s, edge.d, parent, rank)) {
+      mst.push_back(edge);
+      edges_num++;
+    }
+  }
+  auto t_end = chrono::high_resolution_clock::now();
+  double elapsed_s = chrono::duration<double>(t_end - t_start).count();
+
+  long long mst_weight = 0;
+  for (const auto &e : mst) mst_weight += e.w;
+
+  return {mst_weight, elapsed_s};
+}
+
+// ============================================================
+// Borůvka's Algorithm (Sequential, No Contraction)
+// Algorithm code kept exactly as provided — no modifications
+// Returns: (mst_weight, elapsed_seconds)
+// ============================================================
+pair<long long, double> run_boruvka_seq(const vector<Edge> &edges, int n) {
+  // parent and rank prepartions
+  vector<int> parent(n);
+  vector<int> rank(n, 0);
+
+  // Initilize the parent vector
+  for (int i = 0; i < n; i++) {
+    parent[i] = i; // set each parent with the expected id
+  }
+
+  // Step 1: Initilize number of components initially the number of the components will be the nodes maximum number
+  int components_num = n;
+
+  // Step 2: start minimum spanning tree
+  vector<Edge> mst;
+  int edges_num = 0;
+
+  auto t_start = chrono::high_resolution_clock::now();
+
+  while(components_num > 1){
+      vector<int> cheapest(n, -1); // -1 means have not found cheapest yet
+
+      //Part 1: Finding minimum-weight edge
+      for(int i = 0; i < (int)edges.size(); i++){
+          const Edge &edge = edges[i]; //to get the current edge
+          int group1 = find(edge.s, parent); //for the source
+          int group2 = find(edge.d, parent); //for the destination
+
+          if(group1 != group2){
+              if(cheapest[group1] == -1 || edge.w < edges[cheapest[group1]].w){ //current edge.w with previous edges[cheapest[group1]].w to update the lowest value
+                  cheapest[group1] = i;
+              }else if(cheapest[group2] == -1 || edge.w < edges[cheapest[group2]].w){ //current edge.w with previous edges[cheapest[group1]].w to update the lowest value
+                  cheapest[group2] = i;
+              }
+          }
+      }
+
+      //Part 2: connects different components
+      bool merged_any = false;
+      for(int i = 0; i < n; i++){
+          if(cheapest[i] != -1){
+              const Edge &edge = edges[cheapest[i]]; //get current edge
+
+              //push to minimum spanning tree if they are uniqe
+              if(unionfunction(edge.s, edge.d, parent, rank)){
+                  mst.push_back(edge);
+                  components_num--; //because we mereged two diffrenet components
+                  merged_any = true;
+              }
+
+          }
+      }
+      if (!merged_any) break; // no progress — graph may be disconnected
+  }
+
+  auto t_end = chrono::high_resolution_clock::now();
+  double elapsed_s = chrono::duration<double>(t_end - t_start).count();
+
+  long long mst_weight = 0;
+  for (const auto &e : mst) mst_weight += e.w;
+
+  return {mst_weight, elapsed_s};
+}
+
+// ============================================================
+// Borůvka's Algorithm (Parallel, No Contraction)
+// Algorithm code kept exactly as provided — no modifications
+// Uses std::thread with mutex-guarded per-component cheapest updates
+// Returns: (mst_weight, elapsed_seconds)
+// ============================================================
+pair<long long, double> run_boruvka_par(const vector<Edge> &edges, int n) {
+  // parent and rank prepartions
+  vector<int> parent(n);
+  vector<int> rank(n, 0);
+
+  // Initilize the parent vector
+  for (int i = 0; i < n; i++) {
+    parent[i] = i; // set each parent with the expected id
+  }
+
+  // Step 1: Initilize number of components initially the number of the components will be the nodes maximum number
+  int components_num = n;
+
+  // Step 2: start minimum spanning tree
+  vector<Edge> mst;
+  int edges_num = 0;
+
+  // PARALLISIM PREPARTION
+  int par_num_threads = thread::hardware_concurrency();
+  int maximum_edges = edges.size();
+  int threads_edge = maximum_edges / par_num_threads;
+  vector<mutex> component_locks(n);
+
+  auto t_start = chrono::high_resolution_clock::now();
+
+  while (components_num > 1) {
+      vector<int> cheapest(n, -1); // -1 means have not found cheapest yet
+      vector<thread> threads;
+
+      // Part 1: Finding minimum-weight edge (PARALLEL WORK LOAD DISTRIBUTION)
+      for (int t = 0; t < par_num_threads; t++) {
+          //Setup start and end indexes
+          int start_index_of_thread = t * threads_edge;
+          int end_index_of_thread = 0;
+
+          if(t == par_num_threads - 1){
+              end_index_of_thread = maximum_edges;
+          }else{
+              end_index_of_thread = start_index_of_thread + threads_edge;
+          }
+
+          threads.push_back(thread([&, start_index_of_thread, end_index_of_thread]()
+          {
+              for (int i = start_index_of_thread; i < end_index_of_thread; i++)
+              {
+                  const Edge &edge = edges[i];       // to get the current edge
+                  int group1 = find(edge.s, parent); // for the source
+                  int group2 = find(edge.d, parent); // for the destination
+
+                  if (group1 != group2)
+                  {
+                      {
+                          lock_guard<mutex> lock(component_locks[group1]);
+                          if (cheapest[group1] == -1 || edge.w < edges[cheapest[group1]].w)
+                          {
+                              cheapest[group1] = i;
+                          }
+                      }
+                      {
+                          lock_guard<mutex> lock(component_locks[group2]);
+                          if (cheapest[group2] == -1 || edge.w < edges[cheapest[group2]].w)
+                          {
+                              cheapest[group2] = i;
+                          }
+                      }
+                  }
+              }
+          }));
+      }
+
+      //join threads
+      for(auto &th: threads){
+          if(th.joinable()){
+              th.join();
+          }
+      }
+
+      // Part 2: connects different components
+      bool merged_any = false;
+      for (int i = 0; i < n; i++) {
+          if (cheapest[i] != -1) {
+              const Edge &edge = edges[cheapest[i]]; // get current edge
+
+              // push to minimum spanning tree if they are uniqe
+              if (unionfunction(edge.s, edge.d, parent, rank)) {
+                  mst.push_back(edge);
+                  components_num--; // because we mereged two diffrenet components
+                  merged_any = true;
+              }
+          }
+      }
+      if (!merged_any) break; // no progress — graph may be disconnected
+  }
+
+  auto t_end = chrono::high_resolution_clock::now();
+  double elapsed_s = chrono::duration<double>(t_end - t_start).count();
+
+  long long mst_weight = 0;
+  for (const auto &e : mst) mst_weight += e.w;
+
+  return {mst_weight, elapsed_s};
+}
+
+// ============================================================
+// Main — CLI parsing, graph loading, benchmarking loop
+// ============================================================
 int main(int argc, char *argv[]) {
-  // CLI Flag Variables
   string dataset = "";
   string sizes_raw = "";
   string algorithms_raw = "";
@@ -109,7 +325,6 @@ int main(int argc, char *argv[]) {
   int runs = 1;
   string output_dir = "";
 
-  // Mapping long flags to short options
   static struct option long_options[] = {
       {"dataset", required_argument, 0, 'd'},
       {"sizes", required_argument, 0, 's'},
@@ -122,47 +337,39 @@ int main(int argc, char *argv[]) {
 
   int option_index = 0;
   int c;
-
-  // Parse the command line arguments
   while ((c = getopt_long(argc, argv, "d:s:a:t:e:r:o:", long_options,
                           &option_index)) != -1) {
     switch (c) {
-    case 'd':
-      dataset = optarg;
-      break;
-    case 's':
-      sizes_raw = optarg;
-      break;
-    case 'a':
-      algorithms_raw = optarg;
-      break;
-    case 't':
-      num_threads = stoi(optarg);
-      break;
-    case 'e':
-      experiment = optarg;
-      break;
-    case 'r':
-      runs = stoi(optarg);
-      break;
-    case 'o':
-      output_dir = optarg;
-      break;
+    case 'd': dataset = optarg; break;
+    case 's': sizes_raw = optarg; break;
+    case 'a': algorithms_raw = optarg; break;
+    case 't': num_threads = stoi(optarg); break;
+    case 'e': experiment = optarg; break;
+    case 'r': runs = stoi(optarg); break;
+    case 'o': output_dir = optarg; break;
     default:
       cerr << "Usage error.\n";
       return 1;
     }
   }
 
-  // Default to MAX_NODES if sizes flag isn't provided
   vector<string> sizes_str =
       split(sizes_raw.empty() ? to_string(MAX_NODES) : sizes_raw, ',');
 
-  // Extract dataset name from path
+  // Parse algorithms (default: kruskal,boruvka_seq)
+  set<string> algorithms;
+  {
+    vector<string> alg_list = split(
+        algorithms_raw.empty() ? "kruskal,boruvka_seq" : algorithms_raw, ',');
+    for (const auto &a : alg_list) algorithms.insert(a);
+  }
+  bool do_kruskal = algorithms.count("kruskal") > 0;
+  bool do_boruvka = algorithms.count("boruvka_seq") > 0;
+  bool do_boruvka_par = algorithms.count("boruvka_par") > 0;
+
   string ds_name = filesystem::path(
       dataset.empty() ? "Amazon0302.txt" : dataset).stem().string();
 
-  // Prepare CSV output
   string csv_path;
   bool csv_needs_header = false;
   if (!output_dir.empty()) {
@@ -171,152 +378,86 @@ int main(int argc, char *argv[]) {
     csv_needs_header = !filesystem::exists(csv_path);
   }
 
-  // Loop through each size provided in the --sizes flag
   for (const string &size_str : sizes_str) {
     int active_max_nodes = stoi(size_str);
     bool is_full = (active_max_nodes == 0);
-    // 0 means "load full dataset" — set a very large threshold
     if (is_full) active_max_nodes = INT_MAX;
 
-    // Collect timing data across all runs for this size
-    vector<double> times;
-    long long final_mst_weight = 0;
-    int final_edge_count = 0;
-    int actual_nodes = 0;
-
-    // Loop to handle multiple benchmark iterations requested by --runs
-    for (int run = 1; run <= runs; ++run) {
-
-      // Step 1:
-      // Random data for setting weight for edges
-      minstd_rand lcg(42); // the seed is the same in python
-
-      // map to fetch data from text file
-      map<pair<int, int>, int> edge_map;
-
-      // load data
-      ifstream file(dataset.empty() ? "Amazon0302.txt" : dataset);
-
-      // get text from the file
-      string line;
-      while (getline(file, line)) {
-        // This is to skip the header text and comments
-        if (line.empty() || line[0] == '#') {
-          continue;
-        }
-
-        // After skiping the header parsing data is the next operation
-        stringstream ss(line);
-        int sn, dn; // sn is FromNodeId in the text file, dn is the ToNodeId in
-                    // the text file
-        if (ss >> sn >> dn) {
-          if (sn < active_max_nodes &&
-              dn < active_max_nodes) // To do experements on diffrenet size of
-                                     // nodes
-          {
-            int s = min(sn, dn);
-            int d = max(sn, dn);
-            pair<int, int> source_destination_pair = make_pair(s, d);
-
-            // Check if the connection is not already there
-            if (edge_map.find(source_destination_pair) == edge_map.end()) {
-              edge_map[source_destination_pair] = int(lcg());
-            }
+    // ── Load graph (once per size) ──
+    minstd_rand lcg(42);
+    map<pair<int, int>, int> edge_map;
+    ifstream file(dataset.empty() ? "Amazon0302.txt" : dataset);
+    string line;
+    while (getline(file, line)) {
+      if (line.empty() || line[0] == '#') continue;
+      stringstream ss(line);
+      int sn, dn;
+      if (ss >> sn >> dn) {
+        if (sn < active_max_nodes && dn < active_max_nodes) {
+          int s = min(sn, dn);
+          int d = max(sn, dn);
+          auto key = make_pair(s, d);
+          if (edge_map.find(key) == edge_map.end()) {
+            edge_map[key] = int(lcg());
           }
         }
       }
-      file.close();
+    }
+    file.close();
 
-      vector<Edge> edges; // To store edges
+    vector<Edge> edges;
+    for (auto itr = edge_map.begin(); itr != edge_map.end(); ++itr) {
+      edges.push_back({itr->first.first, itr->first.second, itr->second});
+    }
 
-      map<pair<int, int>, int>::iterator itr =
-          edge_map.begin(); // create iterator to edge_map map
+    int actual_nodes = active_max_nodes;
+    if (is_full) {
+      actual_nodes = 0;
+      for (const auto &e : edges) actual_nodes = max(actual_nodes, max(e.s, e.d) + 1);
+    }
 
-      for (size_t i = 0; i < edge_map.size(); i++) {
-        // SOURCE         DESTINATION        WEIGHT
-        edges.push_back({itr->first.first, itr->first.second, itr->second});
-        itr++; // increament the iterator
+    // Helper lambda to benchmark an algorithm and write CSV
+    auto bench_algo = [&](const string &algo_name,
+                          pair<long long, double>(*algo_fn)(const vector<Edge>&, int)) {
+      vector<double> times;
+      long long final_mst_weight = 0;
+
+      for (int run = 1; run <= runs; ++run) {
+        auto [mst_weight, elapsed_s] = algo_fn(edges, actual_nodes);
+        times.push_back(elapsed_s);
+        final_mst_weight = mst_weight;
+
+        cout << "  V=" << actual_nodes << ", E=" << edge_map.size()
+             << "  " << algo_name << ": " << elapsed_s << "s"
+             << "  (MST weight=" << mst_weight << ")" << endl;
       }
 
-      // parent and rank prepartions
-      vector<int> parent(active_max_nodes);
-      vector<int> rank(active_max_nodes, 0);
+      double median_s = compute_median(times);
+      double mean_s = compute_mean(times);
+      double std_s = compute_std(times, mean_s);
+      double min_s = *min_element(times.begin(), times.end());
+      double max_s = *max_element(times.begin(), times.end());
 
-      // Initilize the parent vector
-      for (int i = 0; i < active_max_nodes; i++) {
-        parent[i] = i; // set each parent with the expected id
-      }
-
-      // Step 1: Sorting Edge by w in non-decreasing order
-      // Timer starts HERE — covers sort + MST (matches Rust/Python timing)
-      auto t_start = chrono::high_resolution_clock::now();
-      sort(edges.begin(), edges.end());
-
-      // Step 2: start minimum spanning tree
-      vector<Edge> mst;
-      int edges_num = 0;
-
-      clock_t start_time = clock();
-      for (size_t i = 0; i < edges.size();
-           i++) // Changed to size_t to resolve signed compiler warnings
-      {
-        const Edge &edge = edges[i];
-
-        if (unionfunction(edge.s, edge.d, parent, rank)) {
-          mst.push_back(edge);
-          edges_num++;
+      if (!output_dir.empty()) {
+        ofstream csv(csv_path, ios::app);
+        if (csv_needs_header) {
+          csv << "dataset,algorithm,n_vertices,n_edges,threads,run,time_s,mst_weight,"
+              << "median_s,mean_s,std_s,min_s,max_s" << endl;
+          csv_needs_header = false;
         }
+        for (int run = 0; run < runs; run++) {
+          csv << ds_name << "," << algo_name << "," << actual_nodes << ","
+              << edge_map.size() << ",1," << run << "," << times[run] << ","
+              << final_mst_weight << "," << median_s << "," << mean_s << ","
+              << std_s << "," << min_s << "," << max_s << endl;
+        }
+        csv.close();
       }
-      clock_t end_time = clock();
-      auto t_end = chrono::high_resolution_clock::now();
-      double elapsed_s = chrono::duration<double>(t_end - t_start).count();
+    };
 
-      // Compute MST weight
-      long long mst_weight = 0;
-      for (const auto &e : mst) mst_weight += e.w;
-
-      // Determine actual vertex count (for full-dataset runs)
-      actual_nodes = active_max_nodes;
-      if (is_full) {
-        actual_nodes = 0;
-        for (const auto &e : edges) actual_nodes = max(actual_nodes, max(e.s, e.d) + 1);
-      }
-
-      times.push_back(elapsed_s);
-      final_mst_weight = mst_weight;
-      final_edge_count = (int)edge_map.size();
-
-      cout << "  V=" << actual_nodes << ", E=" << edge_map.size()
-           << "  Kruskal (Seq): " << elapsed_s << "s"
-           << "  (MST weight=" << mst_weight << ")" << endl;
-
-      if (runs > 1 || sizes_str.size() > 1)
-        cout << "------------------------------------" << endl;
-    }
-
-    // Compute stats across all runs for this size
-    double median_s = compute_median(times);
-    double mean_s = compute_mean(times);
-    double std_s = compute_std(times, mean_s);
-    double min_s = *min_element(times.begin(), times.end());
-    double max_s = *max_element(times.begin(), times.end());
-
-    // Write CSV rows (all runs for this size, with shared stats)
-    if (!output_dir.empty()) {
-      ofstream csv(csv_path, ios::app);
-      if (csv_needs_header) {
-        csv << "dataset,algorithm,n_vertices,n_edges,threads,run,time_s,mst_weight,"
-            << "median_s,mean_s,std_s,min_s,max_s" << endl;
-        csv_needs_header = false;
-      }
-      for (int run = 0; run < runs; run++) {
-        csv << ds_name << ",kruskal," << actual_nodes << "," << final_edge_count
-            << ",1," << run << "," << times[run] << "," << final_mst_weight
-            << "," << median_s << "," << mean_s << "," << std_s
-            << "," << min_s << "," << max_s << endl;
-      }
-      csv.close();
-    }
+    if (do_kruskal)     bench_algo("kruskal", run_kruskal);
+    if (do_boruvka)      bench_algo("boruvka_seq", run_boruvka_seq);
+    if (do_boruvka_par)  bench_algo("boruvka_par", run_boruvka_par);
   }
   return 0;
 }
