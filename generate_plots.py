@@ -27,7 +27,9 @@ import argparse, glob
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--run-id', default=None, help='Run ID (timestamp dir under logs/). Defaults to latest.')
+parser.add_argument('--no-errorbars', action='store_true', help='Disable error bars (min/max range) on all plots.')
 args = parser.parse_args()
+SHOW_ERRORBARS = not args.no_errorbars
 
 # Find run directory
 if args.run_id:
@@ -251,9 +253,13 @@ def plot_scalability_annotated(data, title, filename, lang_label, dataset_desc):
         marker = ALGO_MARKERS.get(algo, 'o')
         label = ALGO_LABELS.get(algo, algo)
         ls = '--' if '_nc' in algo else '-'  # dashed for no-contraction
-        ax.errorbar(x, meds, yerr=[yerr_lo, yerr_hi],
-                    fmt=f'{marker}{ls}', color=color,
-                    capsize=3, capthick=1, label=f'{label} ({lang_label})')
+        if SHOW_ERRORBARS:
+            ax.errorbar(x, meds, yerr=[yerr_lo, yerr_hi],
+                        fmt=f'{marker}{ls}', color=color,
+                        capsize=3, capthick=1, label=f'{label} ({lang_label})')
+        else:
+            ax.plot(x, meds, f'{marker}{ls}', color=color,
+                    label=f'{label} ({lang_label})')
         annotate_last(ax, x, meds)
         for r in recs:
             max_edges = max(max_edges, r['n_edges'])
@@ -303,10 +309,15 @@ def plot_combined_scalability(datasets, title, filename, dataset_desc):
             marker = ALGO_MARKERS.get(algo, 'o')
             ls = ALGO_LINESTYLES.get(algo, '-')
             algo_label = ALGO_LABELS.get(algo, algo)
-            ax.errorbar(x, meds, yerr=[yerr_lo, yerr_hi],
-                        fmt=f'{marker}', ls=ls, color=lang_color,
+            if SHOW_ERRORBARS:
+                ax.errorbar(x, meds, yerr=[yerr_lo, yerr_hi],
+                            fmt=f'{marker}', ls=ls, color=lang_color,
+                            lw=lw, ms=5, alpha=alpha,
+                            capsize=3, capthick=1,
+                            label=f'{algo_label} ({lang_label})')
+            else:
+                ax.plot(x, meds, marker=marker, ls=ls, color=lang_color,
                         lw=lw, ms=5, alpha=alpha,
-                        capsize=3, capthick=1,
                         label=f'{algo_label} ({lang_label})')
             for r in recs:
                 max_edges = max(max_edges, r['n_edges'])
@@ -385,8 +396,12 @@ for ax, (data, ds_label, ds_edges) in zip(axes.flat, speedup_datasets):
         yerr_lo = [s - lo for s, lo in zip(speedups, sp_mins)]
         yerr_hi = [hi - s for s, hi in zip(speedups, sp_maxs)]
         color = cmap(idx / max(len(sizes_set)-1, 1))
-        ax.errorbar(thread_set, speedups, yerr=[yerr_lo, yerr_hi],
-                    fmt='o-', color=color, capsize=3, capthick=1,
+        if SHOW_ERRORBARS:
+            ax.errorbar(thread_set, speedups, yerr=[yerr_lo, yerr_hi],
+                        fmt='o-', color=color, capsize=3, capthick=1,
+                        label=f'V={sz//1000}K')
+        else:
+            ax.plot(thread_set, speedups, 'o-', color=color,
                     label=f'V={sz//1000}K')
 
         peak_idx = np.argmax(speedups)

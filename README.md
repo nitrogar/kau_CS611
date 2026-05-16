@@ -1,24 +1,46 @@
 # Parallel MST Benchmark — Kruskal & Borůvka on SNAP Graphs
 
 > **CS 611 · Design and Analysis of Algorithms**
-> Sequential vs Parallel Minimum Spanning Tree algorithms benchmarked on large-scale SNAP datasets in **Rust** (Rayon), **Python** (Numba JIT), and **C++**.
+> Sequential vs Parallel Minimum Spanning Tree algorithms benchmarked on large-scale SNAP datasets in **Rust** (Rayon), **Python** (Numba JIT), and **C++** (`std::thread`).
 
 ---
 
 ## Algorithms
 
+### Core Variants (benchmarked across all three languages)
+
 | Key | Name | Type | Strategy |
 |-----|------|------|----------|
-| `kruskal` | Kruskal (Seq) | Sequential | Sort edges by weight, greedily add non-cycle edges via Union-Find |
-| `boruvka_seq` | Borůvka (Seq) | Sequential | Each component finds cheapest outgoing edge → merge → contract |
-| `boruvka_par` | Borůvka (Par) | Parallel | Parallel comp-ID + contraction; sequential find-min |
-| `boruvka_pooled` | Borůvka (Pooled) | Parallel | Chunked parallel find-min over **edges** with local reduction |
-| `boruvka_groups` | Borůvka (Groups) | Parallel | CSR-indexed parallel find-min over **components** (no atomics) |
-| `petgraph` | Petgraph | Sequential | Third-party Rust reference ([petgraph](https://docs.rs/petgraph)) |
-| `networkx` | NetworkX | Sequential | Third-party Python reference ([NetworkX](https://networkx.org)) |
+| `kruskal` | Kruskal (Seq) | Sequential | Sort edges by weight, greedily add non-cycle edges via Union-Find. O(E log E) |
+| `boruvka_seq` | Borůvka (Seq) | Sequential | Each component finds cheapest outgoing edge → merge → contract. O(E log V) |
+| `boruvka_par` | Borůvka (Par) | Parallel | Parallel comp-ID flatten + edge contraction; sequential find-min and merge |
 
-### C++ Implementation
-The C++ implementation provides a sequential **Kruskal's** algorithm using `std::minstd_rand` for edge weights, serving as an independent cross-language reference point.
+### Ablation Variants (Rust & Python only)
+
+| Key | Name | Purpose |
+|-----|------|---------|
+| `boruvka_seq_nc` | Borůvka (Seq, No Contraction) | Measures the cost of skipping graph contraction — scans all edges every round |
+| `boruvka_par_nc` | Borůvka (Par, No Contraction) | Parallel variant without contraction — demonstrates contraction necessity |
+
+### Experimental Variants (available but not benchmarked by default)
+
+| Key | Name | Description |
+|-----|------|-------------|
+| `boruvka_par_fr` | Borůvka (Par, Fold-Reduce) | Rayon fold/reduce for find-min (high overhead, experimental) |
+| `boruvka_pooled` | Borůvka (Pooled) | Chunked parallel find-min over edges with local reduction |
+| `boruvka_groups` | Borůvka (Groups) | CSR-indexed parallel find-min over components |
+| `petgraph` | Petgraph Kruskal | Third-party Rust MST ([petgraph](https://docs.rs/petgraph)) |
+| `networkx` | NetworkX Kruskal | Third-party Python MST ([NetworkX](https://networkx.org)) |
+
+### Parallelism Models per Language
+
+| Language | Runtime | Parallel Find-Min | Parallel Contraction | Thread Model |
+|----------|---------|-------------------|---------------------|-------------|
+| **Rust** | Rayon | Sequential (default) | `par_iter` keep-mask | Work-stealing thread pool |
+| **Python** | Numba | `prange` (OpenMP) | `prange` edge filter | Static chunk scheduling |
+| **C++** | `std::thread` | `std::mutex`-protected | Sequential compact | Manual thread management |
+
+---
 
 ## Datasets
 
@@ -36,18 +58,19 @@ All datasets are from the [Stanford SNAP](https://snap.stanford.edu/data/) proje
 
 ### Rust
 - [Rust toolchain](https://rustup.rs/) (stable 1.75+)
-- Dependencies managed via `Cargo.toml`: `rayon`, `clap`, `csv`, `petgraph`
+- Dependencies via `Cargo.toml`: `rayon 1.10`, `clap 4`, `csv 1.3`, `petgraph 0.7`
+- Release profile: `opt-level=3`, LTO fat, single codegen unit
 
 ### Python
 - Python 3.12+
-- Install dependencies:
-
+- Dependencies:
 ```bash
 pip install numba numpy matplotlib networkx
 ```
 
 ### C++
-- GCC or Clang with C++17 support (`<filesystem>`, `<chrono>`)
+- GCC 14+ or Clang with C++17 and pthreads support
+- Build flags: `-O2 -std=c++17 -pthread`
 
 ---
 
@@ -76,13 +99,12 @@ cd ..
 ```
 
 ### 3. Build
-
 ```bash
-# Rust (optimized for native CPU)
+# Rust (optimized for native CPU, fat LTO)
 RUSTFLAGS="-C target-cpu=native" cargo build --release
 
 # C++
-g++ -O2 -std=c++17 -o mst_cpp mst_cpp.cpp
+g++ -O2 -std=c++17 -pthread -o mst_cpp mst_cpp.cpp
 ```
 
 ### 4. Run benchmarks
@@ -91,44 +113,46 @@ g++ -O2 -std=c++17 -o mst_cpp mst_cpp.cpp
 ```bash
 chmod +x run_benchmarks.sh
 
-./run_benchmarks.sh              # Everything: Rust + C++ + Python, all datasets
+./run_benchmarks.sh              # Everything: Rust + C++ + Python, all datasets, then plots
 ./run_benchmarks.sh rust         # Rust only, all datasets
 ./run_benchmarks.sh python       # Python only, all datasets
 ./run_benchmarks.sh cpp          # C++ only, all datasets
 ./run_benchmarks.sh rust amazon  # Rust + Amazon only
 ./run_benchmarks.sh rust road    # Rust + roadNet-CA only
 ./run_benchmarks.sh rust orkut   # Rust + com-Orkut only
-./run_benchmarks.sh threads      # Thread scaling sweep (Rust, com-Orkut)
+./run_benchmarks.sh threads      # Thread scaling sweep (Rust)
+./run_benchmarks.sh plots        # Regenerate plots from latest run
 ```
 
 **Option B — Individual runs:**
 
 ```bash
-# Rust — Amazon0302, all 6 algorithms, 8 threads
+# Rust — 5 algorithms, 8 threads, scalability + speedup
 ./target/release/mst-bench \
   --dataset datasets/amazon0302.txt \
   --sizes 5000,10000,25000,50000,100000,0 \
-  --algorithms kruskal,boruvka_seq,boruvka_par,boruvka_pooled,boruvka_groups,petgraph \
+  --algorithms kruskal,boruvka_seq,boruvka_seq_nc,boruvka_par,boruvka_par_nc \
   --num-threads 8 \
-  --experiment scalability \
+  --experiment both \
   --runs 3 \
   --output-dir logs/rust/amazon0302
 
-# Python — Amazon0302, all 6 algorithms
+# Python — 5 algorithms, Numba JIT
 python3.12 mst_python.py \
   --dataset datasets/amazon0302.txt \
   --sizes 5000,10000,25000,50000,100000,0 \
-  --algorithms kruskal,boruvka_seq,boruvka_par,boruvka_pooled,boruvka_groups,networkx \
+  --algorithms kruskal,boruvka_seq,boruvka_seq_nc,boruvka_par,boruvka_par_nc \
   --default-threads 8 \
-  --experiment scalability \
+  --experiment both \
   --runs 3 \
   --output-dir logs/python/amazon0302 \
   --no-plot
 
-# C++ — Amazon0302, Kruskal
+# C++ — 3 algorithms (Kruskal, Borůvka-Seq, Borůvka-Par)
 ./mst_cpp \
   --dataset datasets/amazon0302.txt \
   --sizes 5000,10000,25000,50000,100000,0 \
+  --algorithms kruskal,boruvka_seq,boruvka_par \
   --runs 3 \
   --output-dir logs/cpp/amazon0302
 ```
@@ -145,12 +169,15 @@ python3.12 mst_python.py \
 |------|---------|-------------|
 | `--dataset` | *required* | Path to SNAP edge-list file |
 | `--sizes` | `5000,10000,...` | Comma-separated vertex counts (`0` = full dataset) |
-| `--algorithms` | `kruskal,boruvka_seq,boruvka_par` | Algorithms to run |
+| `--algorithms` | `kruskal,boruvka_seq,boruvka_par` | Algorithms to run (comma-separated) |
 | `--num-threads` | `0` (all cores) | Thread count for Rayon pool |
 | `--runs` | `3` | Repetitions per measurement |
 | `--experiment` | `both` | `scalability`, `speedup`, or `both` |
+| `--threads` | `2,4,8,12,16` | Thread counts for speedup sweep |
 | `--output-dir` | `results/rust` | Output directory for CSVs |
 | `--seed` | `42` | Random seed for edge weights (LCG PRNG) |
+| `--weight-min` | `1` | Minimum edge weight |
+| `--weight-max` | `1000` | Maximum edge weight |
 
 ### Python (`python3.12 mst_python.py`)
 
@@ -158,7 +185,7 @@ python3.12 mst_python.py \
 |------|---------|-------------|
 | `--dataset` | *required* | Path to SNAP edge-list file |
 | `--sizes` | `5000,10000,...` | Comma-separated vertex counts (`0` = full dataset) |
-| `--algorithms` | `kruskal,boruvka_seq,boruvka_par` | Algorithms to run |
+| `--algorithms` | `kruskal,boruvka_seq,boruvka_par` | Algorithms to run (comma-separated) |
 | `--default-threads` | `0` (all cores) | Thread count for Numba `prange` |
 | `--runs` | `5` | Repetitions per measurement |
 | `--experiment` | `both` | `scalability`, `speedup`, or `both` |
@@ -172,8 +199,35 @@ python3.12 mst_python.py \
 |------|---------|-------------|
 | `--dataset` | *required* | Path to SNAP edge-list file |
 | `--sizes` | `5000` | Comma-separated vertex counts (`0` = full dataset) |
+| `--algorithms` | `kruskal,boruvka_seq,boruvka_par` | Algorithms to run |
 | `--runs` | `3` | Repetitions per measurement |
 | `--output-dir` | *(none)* | Output directory for CSV (no output if omitted) |
+
+### Plot Generator (`python3.12 generate_plots.py`)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--run-id` | latest | Timestamp directory under `logs/` to read data from |
+| `--no-errorbars` | — | Disable error bars (min/max range) on all plots |
+
+---
+
+## Benchmark Configuration
+
+The `run_benchmarks.sh` script defines these defaults at the top:
+
+```bash
+RUNS=3
+NUM_THREADS=8
+RUST_ALGORITHMS="kruskal,boruvka_seq,boruvka_seq_nc,boruvka_par,boruvka_par_nc"
+PYTHON_ALGORITHMS="kruskal,boruvka_seq,boruvka_seq_nc,boruvka_par,boruvka_par_nc"
+CPP_ALGORITHMS="kruskal,boruvka_seq,boruvka_par"
+THREAD_COUNTS="2,4,8,12,16"
+
+AMAZON_SIZES="5000,10000,25000,50000,100000,0"
+ROAD_SIZES="50000,200000,500000,0"
+ORKUT_SIZES="50000,200000,500000,1000000,0"
+```
 
 ---
 
@@ -181,27 +235,28 @@ python3.12 mst_python.py \
 
 ```
 .
-├── src/main.rs              # Rust: 6 algorithms + benchmark CLI (Rayon, Petgraph)
-├── mst_python.py            # Python: 6 algorithms + benchmark CLI (Numba, NetworkX)
-├── mst_cpp.cpp              # C++: Kruskal sequential + CSV output
-├── main.py                  # Python benchmark orchestrator (size/thread sweeps)
+├── src/main.rs              # Rust: 8 algorithm variants + benchmark CLI (Rayon, Petgraph)
+├── mst_python.py            # Python: 8 algorithm variants + benchmark CLI (Numba, NetworkX)
+├── mst_cpp.cpp              # C++: Kruskal + Borůvka-Seq + Borůvka-Par (std::thread + mutex)
+├── main.py                  # Legacy Python benchmark orchestrator
+├── run_benchmarks.sh         # Automated benchmark runner (Rust + Python + C++, all datasets)
+├── generate_plots.py         # Publication-quality annotated plots (7 figures)
 ├── Cargo.toml               # Rust dependencies (rayon, clap, csv, petgraph)
 ├── pyproject.toml            # Python project config
-├── run_benchmarks.sh         # Automated benchmark runner (Rust + Python + C++)
-├── generate_ahmed_plots.py   # Publication-quality annotated plots (10 figures)
-├── generate_final_plots.py   # Thread-scaling analysis plots
-├── generate_plots.py         # Legacy plot generator
 ├── datasets/                 # SNAP datasets (download separately, git-ignored)
 │   ├── amazon0302.txt
 │   ├── roadNet-CA.txt
 │   └── com-orkut.ungraph.txt
-├── logs/                     # Benchmark CSV outputs (git-ignored)
-│   ├── rust/
-│   ├── python/
-│   └── cpp/
-└── report/                   # LaTeX report + generated figures
+├── logs/                     # Benchmark CSV outputs (timestamped runs, git-ignored)
+│   └── <YYYY-MM-DD_HH-MM-SS>/
+│       ├── rust/<dataset>/scalability_*.csv, speedup_*.csv
+│       ├── python/<dataset>/scalability_*.csv, speedup_*.csv
+│       ├── cpp/<dataset>/scalability_*.csv
+│       └── figures/          # Generated PNG plots
+└── report/                   # LaTeX report + slides
     ├── CS611_Project_Report.tex
-    └── figures/              # 10 publication-quality PNG plots
+    ├── CS611_Project_Slides.tex
+    └── figures/              # Publication-quality PNG plots
 ```
 
 ---
@@ -209,51 +264,99 @@ python3.12 mst_python.py \
 ## How It Works
 
 ### Edge Loading & Weight Assignment
-All three implementations:
+
+All three implementations follow an identical pipeline:
 1. Read SNAP tab/space-separated edge lists
 2. Filter by vertex ID for size sweeps (`--sizes`)
 3. Deduplicate into undirected edges: `(min(u,v), max(u,v))`
-4. Remap vertex IDs to contiguous `0..N-1`
-5. Assign deterministic random weights using a **portable LCG PRNG** (seed=42)
+4. Sort edges lexicographically for deterministic ordering
+5. Remap vertex IDs to contiguous `0..N-1`
+6. Assign deterministic random weights using a **portable LCG PRNG** (seed=42)
 
-The Rust and Python implementations use identical LCG constants (`mult=6364136223846793005`, `inc=1442695040888963407`) ensuring **exact MST weight agreement** across both languages. The C++ implementation uses `std::minstd_rand` (different PRNG), so its MST weights differ but are equally valid.
+The Rust and Python implementations use identical LCG constants (`mult=6364136223846793005`, `inc=1442695040888963407`) ensuring **exact MST weight agreement** across both languages at all graph sizes. The C++ implementation uses `std::minstd_rand` (different PRNG), so its MST weights differ but are equally valid.
 
 ### Borůvka Phases (per round)
-1. **Flatten component IDs** — path-splitting find on Union-Find
-2. **Find minimum** — each component finds its cheapest outgoing edge
-3. **Merge** — Union-Find merge on cheapest edges
-4. **Contract** — remove intra-component edges (shrinks edge set ~50% per round)
 
-Rounds repeat until only 1 component remains → `O(log V)` rounds total.
+```
+┌─────────────────────────────────────────────────┐
+│ Round k                                          │
+│  1. Flatten comp-IDs  (parallel in boruvka_par)  │
+│  2. Find minimum      (sequential — Amdahl's f)  │
+│  3. Merge (Union-Find) (sequential)              │
+│  4. Contract edges     (parallel in boruvka_par)  │
+│     → removes ~50% of edges per round            │
+└─────────────────────────────────────────────────┘
+     Repeats O(log V) rounds until 1 component
+```
+
+### No-Contraction Ablation
+
+The `_nc` variants skip Phase 4 (contraction), scanning ALL original edges every round. This empirically demonstrates that contraction reduces total work from O(E · log V) to O(E) amortized — a critical optimization.
 
 ### Parallelization Strategies
+
 | Variant | Phase 1 (Flatten) | Phase 2 (Find-Min) | Phase 3 (Merge) | Phase 4 (Contract) |
 |---------|:-:|:-:|:-:|:-:|
-| **Par** | ✅ parallel | ❌ sequential | ❌ sequential | ✅ parallel |
-| **Pooled** | ✅ parallel | ✅ chunked over edges | ❌ sequential | ❌ sequential |
-| **Groups** | ✅ parallel | ✅ CSR per component | ❌ sequential | ❌ sequential |
+| **boruvka_par (Rust)** | ✅ `par_iter_mut` | ❌ sequential | ❌ inline find+union | ✅ `par_iter_mut` |
+| **boruvka_par (Python)** | ✅ `prange` | ❌ sequential | ❌ sequential | ✅ `prange` |
+| **boruvka_par (C++)** | ❌ sequential | ❌ `std::mutex` | ❌ sequential | ❌ sequential |
 
-### Third-Party Validation
-- **NetworkX** (Python): Independent Kruskal implementation — validated at all graph sizes with exact weight match
-- **Petgraph** (Rust): Independent Kruskal implementation — validated with exact weight match
+### Performance Optimizations (Rust)
+
+The Rust implementation includes several performance-critical optimizations:
+
+1. **Struct-of-Arrays (SoA) layout**: Edge data stored as separate `eu[]`, `ev[]`, `ew[]` arrays for SIMD-friendly access
+2. **Direct edge sort (Kruskal)**: Sort `(w,u,v)` tuples directly instead of indirect index sort — eliminates cache misses
+3. **Zero-clone benchmark loop**: Algorithms borrow `&EdgeArrays` — no outer clone per run
+4. **Pre-allocated buffers**: `comp_ids`, `cheapest_w`, `cheapest_idx` allocated once and reused across all Borůvka rounds
+5. **Inline find+union**: `boruvka_par` merge phase uses inline path-splitting find and union-by-rank — no `UnionFind` struct clone per round
+6. **Unsafe parallel flatten**: `comp_ids` populated via `par_iter_mut` with raw pointer reads from `parent[]` (safe because parent is read-only during flatten phase)
+7. **Release profile**: `opt-level=3`, fat LTO, single codegen unit, native CPU target
+
+### Validation
+
+- **Cross-language**: Rust and Python MST weights match exactly at all graph sizes (same LCG PRNG)
+- **Third-party**: NetworkX (Python) and Petgraph (Rust) independently compute identical MST weights
+- **Intra-language**: All algorithm variants (Kruskal, Borůvka-Seq, Borůvka-Par) produce the same MST weight
 
 ---
 
 ## Generating Plots
 
-After collecting benchmark results in `logs/`, regenerate the 10 publication figures:
+After collecting benchmark results, generate the 7 publication figures:
 
 ```bash
-python3.12 generate_ahmed_plots.py
+# Using latest run
+python3.12 generate_plots.py
+
+# Using a specific run
+python3.12 generate_plots.py --run-id 2026-05-16_12-30-00
+
+# Without error bars (cleaner figures)
+python3.12 generate_plots.py --no-errorbars
 ```
 
-Output goes to `report/figures/`:
-- 4 scalability plots (Python/Rust × Road/Amazon)
-- 2 parallel speedup plots
-- 1 cross-language comparison
-- 1 speedup ratio (Rust/Python)
-- 1 parallel efficiency plot
-- 1 validation summary table
+### Output Figures
+
+| # | Filename | Description |
+|---|----------|-------------|
+| 1 | `scalability_roadNet-CA.png` | Combined scalability: Python + Rust + C++ on road network |
+| 2 | `scalability_amazon0302.png` | Combined scalability: Python + Rust + C++ on Amazon |
+| 3 | `parallel_speedup.png` | 2×2 grid: speedup vs thread count (Python/Rust × Road/Amazon) |
+| 4 | `parallel_efficiency.png` | Parallel efficiency = speedup/threads × 100% |
+| 5 | `python_vs_rust_comparison.png` | Cross-language overlay on both datasets |
+| 6 | `rust_over_python_ratio.png` | Rust/Python speedup ratio per algorithm |
+| 7 | `validation_summary.png` | MST weight correctness across all implementations |
+
+### Visual Encoding
+
+All plots use a consistent visual encoding:
+
+| Dimension | Encodes | Legend |
+|-----------|---------|--------|
+| **Color** | Language | 🔵 Blue = Python, 🟠 Orange = Rust, 🟢 Green = C++ |
+| **Marker shape** | Algorithm | ● = Kruskal, ■ = Borůvka-Seq, ▲ = Borůvka-Par, ◆ = Seq-NC, ▼ = Par-NC |
+| **Linestyle** | Algorithm type | Solid = with contraction, Dashed = no contraction |
 
 ---
 
@@ -263,12 +366,43 @@ All benchmarks in the report were run on:
 
 | Component | Specification |
 |-----------|---------------|
-| CPU | AMD Ryzen 9 3900X (12 cores / 24 threads, up to 4.67 GHz) |
+| CPU | AMD Ryzen 9 3900X (12 cores / 24 threads, boost to 4.67 GHz) |
 | RAM | 64 GB DDR4-3200 |
 | OS | Linux (kernel 6.x) |
-| Rust | rustc 1.86+ (release, `-C target-cpu=native`) |
-| Python | 3.12 + Numba 0.61 |
-| C++ | GCC 14+ (`-O2 -std=c++17`) |
+| Rust | rustc 1.86+ (`--release`, `-C target-cpu=native`, fat LTO) |
+| Python | 3.12 + Numba 0.61 + NumPy |
+| C++ | GCC 14+ (`-O2 -std=c++17 -pthread`) |
+
+---
+
+## Report
+
+The LaTeX report is in `report/CS611_Project_Report.tex`. It covers:
+
+1. **Introduction** — MST problem, motivation for parallel Borůvka
+2. **Algorithm Design** — Kruskal, Borůvka with/without contraction, parallel strategies
+3. **Implementation** — Tri-language architecture, Union-Find, LCG PRNG
+4. **Experiments** — 6 experiments (E1–E6): scalability, speedup, efficiency, cross-language, validation
+5. **Findings** — Contraction essential, Numba ≈ native for compute-bound loops, Amdahl's Law analysis
+6. **Conclusion** — Recommendations for practitioners
+
+Compile with:
+```bash
+cd report && pdflatex CS611_Project_Report.tex
+```
+
+---
+
+## Key Results
+
+| Metric | Finding |
+|--------|---------|
+| **Contraction** | Borůvka without contraction is O(log V) × slower — empirically confirmed |
+| **Numba vs Native** | Numba JIT achieves within 0–50% of Rust/C++ for compute-bound loops |
+| **Kruskal: Rust vs Python** | Rust 2–2.4× faster (pdqsort vs introsort) |
+| **Peak parallel speedup** | 1.94× at 8 threads (Rust/Rayon on roadNet-CA, 200K vertices) |
+| **Amdahl's serial fraction** | f ≈ 0.44 (find-min + merge are sequential) |
+| **SMT benefit** | Diminishing returns beyond 12 physical cores |
 
 ---
 
