@@ -38,7 +38,7 @@
 |----------|---------|-------------------|---------------------|-------------|
 | **Rust** | Rayon | Sequential (default) | `par_iter` comp-ID flatten + compact | Work-stealing thread pool |
 | **Python** | Numba | Sequential (default) | `prange` comp-ID flatten + filter | Static chunk scheduling |
-| **C++** | `std::thread` | `std::mutex`-guarded parallel | No contraction | Manual thread management |
+| **C++** | `std::thread` | Fused with find-min (parallel) | No contraction | Manual thread management |
 
 ---
 
@@ -299,7 +299,7 @@ The `_nc` variants skip Phase 4 (contraction), scanning ALL original edges every
 |---------|:-:|:-:|:-:|:-:|
 | **boruvka_par (Rust)** | ✅ `par_iter_mut` | ❌ sequential | ❌ inline find+union | ✅ `par_iter_mut` |
 | **boruvka_par (Python)** | ✅ `prange` | ❌ sequential | ❌ sequential | ✅ `prange` |
-| **boruvka_par (C++)** | ❌ sequential | ✅ `std::thread` + `std::mutex` | ❌ sequential | ❌ no contraction |
+| **boruvka_par (C++)** | ✅ fused with find-min | ✅ `std::thread` + `std::mutex` | ❌ sequential | ❌ no contraction |
 
 ### Performance Optimizations (Rust)
 
