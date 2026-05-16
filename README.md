@@ -36,9 +36,9 @@
 
 | Language | Runtime | Parallel Find-Min | Parallel Contraction | Thread Model |
 |----------|---------|-------------------|---------------------|-------------|
-| **Rust** | Rayon | Sequential (default) | `par_iter` keep-mask | Work-stealing thread pool |
-| **Python** | Numba | `prange` (OpenMP) | `prange` edge filter | Static chunk scheduling |
-| **C++** | `std::thread` | `std::mutex`-protected | Sequential compact | Manual thread management |
+| **Rust** | Rayon | Sequential (default) | `par_iter` comp-ID flatten + compact | Work-stealing thread pool |
+| **Python** | Numba | Sequential (default) | `prange` comp-ID flatten + filter | Static chunk scheduling |
+| **C++** | `std::thread` | `std::mutex`-guarded parallel | No contraction | Manual thread management |
 
 ---
 
@@ -299,7 +299,7 @@ The `_nc` variants skip Phase 4 (contraction), scanning ALL original edges every
 |---------|:-:|:-:|:-:|:-:|
 | **boruvka_par (Rust)** | ✅ `par_iter_mut` | ❌ sequential | ❌ inline find+union | ✅ `par_iter_mut` |
 | **boruvka_par (Python)** | ✅ `prange` | ❌ sequential | ❌ sequential | ✅ `prange` |
-| **boruvka_par (C++)** | ❌ sequential | ❌ `std::mutex` | ❌ sequential | ❌ sequential |
+| **boruvka_par (C++)** | ❌ sequential | ✅ `std::thread` + `std::mutex` | ❌ sequential | ❌ no contraction |
 
 ### Performance Optimizations (Rust)
 
