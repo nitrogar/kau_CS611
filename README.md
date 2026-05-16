@@ -300,6 +300,11 @@ The `_nc` variants skip Phase 4 (contraction), scanning ALL original edges every
 | **boruvka_par (Rust)** | ✅ `par_iter_mut` | ❌ sequential | ❌ inline find+union | ✅ `par_iter_mut` |
 | **boruvka_par (Python)** | ✅ `prange` | ❌ sequential | ❌ sequential | ✅ `prange` |
 | **boruvka_par (C++)** | ✅ fused with find-min | ✅ `std::thread` + `std::mutex` | ❌ sequential | ❌ no contraction |
+| **boruvka_par_fr (Rust)** ⚠️ | ✅ `par_iter` | ✅ Rayon `fold`/`reduce` | ❌ sequential | ✅ `par_iter` |
+| **boruvka_pooled (Rust)** ⚠️ | ✅ `par_iter` | ✅ chunked `par_iter` + merge | ❌ sequential | ✅ sequential |
+| **boruvka_groups (Rust)** ⚠️ | ✅ `par_iter` | ✅ CSR per-component | ❌ sequential | ✅ sequential |
+
+> ⚠️ **Slower in practice:** `boruvka_par_fr`, `boruvka_pooled`, and `boruvka_groups` parallelize find-min but allocate per-chunk `O(n)` arrays each round, making them slower than the default `boruvka_par` which keeps find-min sequential and avoids this overhead.
 
 ### Performance Optimizations (Rust)
 
