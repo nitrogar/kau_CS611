@@ -411,11 +411,17 @@ int main(int argc, char *argv[]) {
       edges.push_back({itr->first.first, itr->first.second, itr->second});
     }
 
-    int actual_nodes = active_max_nodes;
-    if (is_full) {
-      actual_nodes = 0;
-      for (const auto &e : edges) actual_nodes = max(actual_nodes, max(e.s, e.d) + 1);
+    // Count vertices two ways:
+    // - num_nodes: max_id + 1, needed for parent/rank array sizing in algorithms
+    // - num_unique_vertices: actual distinct vertex count, for CSV (matches Python/Rust)
+    int num_nodes = 0;
+    set<int> unique_vertices;
+    for (const auto &e : edges) {
+      num_nodes = max(num_nodes, max(e.s, e.d) + 1);
+      unique_vertices.insert(e.s);
+      unique_vertices.insert(e.d);
     }
+    int num_unique_vertices = unique_vertices.size();
 
     // Helper lambda to benchmark an algorithm and write CSV
     auto bench_algo = [&](const string &algo_name,
@@ -424,11 +430,11 @@ int main(int argc, char *argv[]) {
       long long final_mst_weight = 0;
 
       for (int run = 1; run <= runs; ++run) {
-        auto [mst_weight, elapsed_s] = algo_fn(edges, actual_nodes);
+        auto [mst_weight, elapsed_s] = algo_fn(edges, num_nodes);
         times.push_back(elapsed_s);
         final_mst_weight = mst_weight;
 
-        cout << "  V=" << actual_nodes << ", E=" << edge_map.size()
+        cout << "  V=" << num_unique_vertices << ", E=" << edge_map.size()
              << "  " << algo_name << ": " << elapsed_s << "s"
              << "  (MST weight=" << mst_weight << ")" << endl;
       }
@@ -448,7 +454,7 @@ int main(int argc, char *argv[]) {
         }
         int csv_threads = (algo_name == "boruvka_par") ? ((num_threads > 0) ? num_threads : (int)thread::hardware_concurrency()) : 1;
         for (int run = 0; run < runs; run++) {
-          csv << ds_name << "," << algo_name << "," << actual_nodes << ","
+          csv << ds_name << "," << algo_name << "," << num_unique_vertices << ","
               << edge_map.size() << "," << csv_threads << "," << run << "," << times[run] << ","
               << final_mst_weight << "," << median_s << "," << mean_s << ","
               << std_s << "," << min_s << "," << max_s << endl;

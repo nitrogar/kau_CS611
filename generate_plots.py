@@ -323,23 +323,89 @@ if not df_scalability.empty:
     DATASET_ORDER = [(ds[0], ds[1]) for ds in DATASETS]
     ALGOS_ORDER = ['kruskal', 'boruvka_seq', 'boruvka_seq_nc', 'boruvka_par', 'boruvka_par_nc']
 
-    print(f"\n  CROSS-LANGUAGE COMPARISON (max graph size)\n")
+    def table_sep(widths):
+        return '+' + '+'.join('-' * (w + 2) for w in widths) + '+'
+    def table_row(values, widths):
+        cells = []
+        for i, (val, width) in enumerate(zip(values, widths)):
+            cells.append(f' {val:<{width}} ' if i < 3 else f' {val:>{width}} ')
+        return '|' + '|'.join(cells) + '|'
+
+    # ── Table 1: Detailed scalability data ──
+    col_widths = [12, 18, 6, 10, 11, 4, 4, 10, 9, 10, 10]
+    headers = ['Dataset', 'Algorithm', 'Lang', 'Vertices', 'Edges', 'Thr', 'Runs',
+               'Avg (s)', 'Std (s)', 'Min (s)', 'Max (s)']
+    print(f"\n  SCALABILITY DATA (same data points as plots, average of N runs)\n")
+    print(table_sep(col_widths))
+    print(table_row(headers, col_widths))
+    print(table_sep(col_widths))
+    prev_dataset = None
     for dataset_key, dataset_name in DATASET_ORDER:
+        for lang in LANGS:
+            for algo in ALGOS_ORDER:
+                sub = select_rows(df_scalability, lang=lang, ds_key=dataset_key, algo=algo)
+                if sub.empty: continue
+                for (vertex_count, thread_count), group in sub.groupby(['n_vertices', 'threads']):
+                    times = group['time_s']
+                    if dataset_name != prev_dataset and prev_dataset is not None:
+                        print(table_sep(col_widths))
+                    ds_col = dataset_name if dataset_name != prev_dataset else ""
+                    prev_dataset = dataset_name
+                    print(table_row([
+                        ds_col, algo_label(algo), LANG_DISPLAY[lang],
+                        f"{vertex_count:,}", f"{int(group['n_edges'].iloc[0]):,}",
+                        str(thread_count), str(len(times)),
+                        f"{times.mean():.6f}", f"{times.std():.6f}",
+                        f"{times.min():.6f}", f"{times.max():.6f}",
+                    ], col_widths))
+    print(table_sep(col_widths))
+
+    # ── Table 2: Cross-language comparison at max size ──
+    col_widths_2 = [12, 18, 10, 11, 12, 12, 12, 8]
+    headers_2 = ['Dataset', 'Algorithm', 'Vertices', 'Edges',
+                 'Python (s)', 'Rust (s)', 'C++ (s)', 'Fastest']
+    print(f"\n  CROSS-LANGUAGE COMPARISON (avg time at max graph size, * = fastest)\n")
+    print(table_sep(col_widths_2))
+    print(table_row(headers_2, col_widths_2))
+    print(table_sep(col_widths_2))
+    prev_dataset = None
+    for dataset_key, dataset_name in DATASET_ORDER:
+        if prev_dataset is not None:
+            print(table_sep(col_widths_2))
+        prev_dataset = dataset_name
         for algo in ALGOS_ORDER:
-            time_by_lang, max_vertices = {}, 0
+            time_by_lang, meta = {}, {}
             for lang in LANGS:
                 sub = select_rows(df_scalability, lang=lang, ds_key=dataset_key, algo=algo)
                 if sub.empty: continue
                 max_v = sub['n_vertices'].max()
-                time_by_lang[LANG_DISPLAY[lang]] = sub.loc[sub['n_vertices'] == max_v, 'time_s'].mean()
-                max_vertices = max(max_vertices, max_v)
+                max_sub = sub[sub['n_vertices'] == max_v]
+                time_by_lang[LANG_DISPLAY[lang]] = max_sub['time_s'].mean()
+                meta['vertices'] = max_v
+                meta['edges'] = int(max_sub['n_edges'].iloc[0])
             if not time_by_lang: continue
+            # Warn if languages have different max vertex counts (normalization should prevent this)
+            all_maxes = set()
+            for lang in LANGS:
+                sub = select_rows(df_scalability, lang=lang, ds_key=dataset_key, algo=algo)
+                if not sub.empty: all_maxes.add(sub['n_vertices'].max())
+            if len(all_maxes) > 1:
+                print(f"  [WARN] {dataset_key}/{algo}: max vertex counts differ: {sorted(all_maxes)}")
             fastest_lang = min(time_by_lang, key=time_by_lang.get)
-            parts = [f"{LANG_DISPLAY[lang]}={time_by_lang.get(LANG_DISPLAY[lang], 0):.4f}{'*' if LANG_DISPLAY[lang] == fastest_lang else ''}"
-                     for lang in LANGS if LANG_DISPLAY[lang] in time_by_lang]
-            print(f"    {dataset_name:12s} {algo_label(algo):20s} V={max_vertices:>10,}  {' | '.join(parts)}")
+            py_str = f"{time_by_lang['Python']:.4f}" if 'Python' in time_by_lang else "—"
+            rs_str = f"{time_by_lang['Rust']:.4f}" if 'Rust' in time_by_lang else "—"
+            cpp_str = f"{time_by_lang['C++']:.4f}" if 'C++' in time_by_lang else "—"
+            if fastest_lang == 'Python': py_str = f"*{py_str}"
+            elif fastest_lang == 'Rust': rs_str = f"*{rs_str}"
+            elif fastest_lang == 'C++': cpp_str = f"*{cpp_str}"
+            print(table_row([
+                dataset_name, algo_label(algo),
+                f"{meta['vertices']:,}", f"{meta['edges']:,}",
+                py_str, rs_str, cpp_str, fastest_lang,
+            ], col_widths_2))
+    print(table_sep(col_widths_2))
 
-    # LaTeX table
+    # ── LaTeX table ──
     latex_path = os.path.join(FIGURES_DIR, 'benchmark_summary.tex')
     with open(latex_path, 'w') as tex_file:
         tex_file.write("% Auto-generated\n\\begin{table}[H]\\centering\\small\n")
@@ -368,7 +434,7 @@ if not df_scalability.empty:
             tex_file.write("\\midrule\n")
         tex_file.seek(tex_file.tell() - len("\\midrule\n"))
         tex_file.write("\\bottomrule\n\\end{tabular}\n\\end{table}\n")
-    print(f"  LaTeX → {latex_path}")
+    print(f"\n  LaTeX → {latex_path}")
 
 # ── Final summary ──
 print(f"\n{'=' * 60}\nAll figures → {FIGURES_DIR}/\n{'=' * 60}")

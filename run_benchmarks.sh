@@ -184,7 +184,7 @@ run_python_orkut() {
     mkdir -p "$out"
     python3.12 mst_python.py \
         --dataset "$ORKUT" \
-        --sizes "50000,200000,500000" \
+        --sizes "$ROAD_SIZES" \
         --threads "$THREAD_COUNTS" \
         --algorithms "$PYTHON_ALGORITHMS" \
         --default-threads "$NUM_THREADS" \
