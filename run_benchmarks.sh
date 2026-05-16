@@ -223,7 +223,7 @@ run_cpp_road() {
 }
 
 run_cpp_orkut() {
-    header "C++: com-Orkut (Kruskal + Borůvka-Seq)"
+    header "C++: com-Orkut (Kruskal + Borůvka-Seq + Borůvka-Par)"
     local out="$RUN_DIR/cpp/com-orkut"
     mkdir -p "$out"
     ./mst_cpp \
@@ -233,6 +233,45 @@ run_cpp_orkut() {
         --runs "$RUNS" \
         --output-dir "$out"
     done_msg "$out"
+}
+
+# ─── C++ Thread Scaling ─────────────────────────────────────
+run_cpp_speedup() {
+    header "C++: Thread Scaling (all datasets)"
+    for DS_NAME in roadNet-CA amazon0302 com-orkut; do
+        case "$DS_NAME" in
+            roadNet-CA) DS_FILE="$ROAD";   DS_SIZES="$ROAD_SIZES" ;;
+            amazon0302) DS_FILE="$AMAZON"; DS_SIZES="$AMAZON_SIZES" ;;
+            com-orkut)  DS_FILE="$ORKUT";  DS_SIZES="$ORKUT_SIZES" ;;
+        esac
+        local ds_stem
+        ds_stem=$(basename "$DS_FILE" .txt)
+
+        # Sequential baseline (T=1)
+        local sp_out="$RUN_DIR/cpp/$DS_NAME"
+        mkdir -p "$sp_out"
+        echo "  → C++ seq baseline: $DS_NAME (T=1)..."
+        ./mst_cpp \
+            --dataset "$DS_FILE" \
+            --sizes "$DS_SIZES" \
+            --algorithms boruvka_seq \
+            --num-threads 1 \
+            --runs "$RUNS" \
+            --output-dir "$sp_out"
+
+        # Parallel at each thread count → append to speedup CSV
+        for T in ${THREAD_COUNTS//,/ }; do
+            echo "  → C++ par: $DS_NAME (T=$T)..."
+            ./mst_cpp \
+                --dataset "$DS_FILE" \
+                --sizes "$DS_SIZES" \
+                --algorithms boruvka_par \
+                --num-threads "$T" \
+                --runs "$RUNS" \
+                --output-dir "$sp_out"
+        done
+    done
+    done_msg "C++ thread scaling"
 }
 
 # ─── Plot Generation ────────────────────────────────────────
@@ -274,10 +313,21 @@ case "$MODE" in
             orkut)   run_cpp_orkut ;;
             *)       run_cpp_amazon; run_cpp_road; run_cpp_orkut ;;
         esac
+        run_cpp_speedup
         ;;
     threads)
         build_rust
         run_thread_scaling
+        ;;
+    cpp_threads)
+        build_cpp
+        run_cpp_speedup
+        ;;
+    speedup)
+        build_rust
+        run_thread_scaling
+        build_cpp
+        run_cpp_speedup
         ;;
     all)
         build_rust
@@ -289,6 +339,7 @@ case "$MODE" in
         run_cpp_amazon
         run_cpp_road
         run_cpp_orkut
+        run_cpp_speedup
         run_python_amazon
         run_python_road
         run_python_orkut
@@ -307,7 +358,7 @@ case "$MODE" in
         generate_plots
         ;;
     *)
-        echo "Usage: $0 [rust|python|cpp|threads|plots|all] [amazon|road|orkut]"
+        echo "Usage: $0 [rust|python|cpp|threads|cpp_threads|speedup|plots|all] [amazon|road|orkut]"
         exit 1
         ;;
 esac

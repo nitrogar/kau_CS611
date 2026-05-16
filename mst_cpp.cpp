@@ -4,6 +4,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <getopt.h>
 #include <iostream>
 #include <map>
@@ -210,7 +211,7 @@ pair<long long, double> run_boruvka_seq(const vector<Edge> &edges, int n) {
 // Uses std::thread with mutex-guarded per-component cheapest updates
 // Returns: (mst_weight, elapsed_seconds)
 // ============================================================
-pair<long long, double> run_boruvka_par(const vector<Edge> &edges, int n) {
+pair<long long, double> run_boruvka_par(const vector<Edge> &edges, int n, int num_threads = 0) {
   // parent and rank prepartions
   vector<int> parent(n);
   vector<int> rank(n, 0);
@@ -228,7 +229,7 @@ pair<long long, double> run_boruvka_par(const vector<Edge> &edges, int n) {
   int edges_num = 0;
 
   // PARALLISIM PREPARTION
-  int par_num_threads = thread::hardware_concurrency();
+  int par_num_threads = (num_threads > 0) ? num_threads : thread::hardware_concurrency();
   int maximum_edges = edges.size();
   int threads_edge = maximum_edges / par_num_threads;
   vector<mutex> component_locks(n);
@@ -418,7 +419,7 @@ int main(int argc, char *argv[]) {
 
     // Helper lambda to benchmark an algorithm and write CSV
     auto bench_algo = [&](const string &algo_name,
-                          pair<long long, double>(*algo_fn)(const vector<Edge>&, int)) {
+                          function<pair<long long, double>(const vector<Edge>&, int)> algo_fn) {
       vector<double> times;
       long long final_mst_weight = 0;
 
@@ -445,9 +446,10 @@ int main(int argc, char *argv[]) {
               << "median_s,mean_s,std_s,min_s,max_s" << endl;
           csv_needs_header = false;
         }
+        int csv_threads = (algo_name == "boruvka_par") ? ((num_threads > 0) ? num_threads : (int)thread::hardware_concurrency()) : 1;
         for (int run = 0; run < runs; run++) {
           csv << ds_name << "," << algo_name << "," << actual_nodes << ","
-              << edge_map.size() << ",1," << run << "," << times[run] << ","
+              << edge_map.size() << "," << csv_threads << "," << run << "," << times[run] << ","
               << final_mst_weight << "," << median_s << "," << mean_s << ","
               << std_s << "," << min_s << "," << max_s << endl;
         }
@@ -457,7 +459,9 @@ int main(int argc, char *argv[]) {
 
     if (do_kruskal)     bench_algo("kruskal", run_kruskal);
     if (do_boruvka)      bench_algo("boruvka_seq", run_boruvka_seq);
-    if (do_boruvka_par)  bench_algo("boruvka_par", run_boruvka_par);
+    if (do_boruvka_par)  bench_algo("boruvka_par", [&](const vector<Edge>& e, int nn) {
+      return run_boruvka_par(e, nn, num_threads);
+    });
   }
   return 0;
 }

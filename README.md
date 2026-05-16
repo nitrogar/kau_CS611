@@ -347,11 +347,12 @@ python3.12 generate_plots.py --no-errorbars
 |---|----------|-------------|
 | 1 | `scalability_roadNet-CA.png` | Combined scalability: Python + Rust + C++ on road network |
 | 2 | `scalability_amazon0302.png` | Combined scalability: Python + Rust + C++ on Amazon |
-| 3 | `parallel_speedup.png` | 2×2 grid: speedup vs thread count (Python/Rust × Road/Amazon) |
-| 4 | `parallel_efficiency.png` | Parallel efficiency = speedup/threads × 100% |
-| 5 | `python_vs_rust_comparison.png` | Cross-language overlay on both datasets |
-| 6 | `rust_over_python_ratio.png` | Rust/Python speedup ratio per algorithm |
-| 7 | `validation_summary.png` | MST weight correctness across all implementations |
+| 3 | `scalability_com-orkut.png` | Combined scalability: Python + Rust + C++ on Orkut social network |
+| 4 | `parallel_speedup.png` | 2×3 grid: speedup vs thread count (Python/Rust × Road/Amazon/Orkut) |
+| 5 | `parallel_efficiency.png` | 2×3 grid: parallel efficiency (Python/Rust × Road/Amazon/Orkut) |
+| 6 | `python_vs_rust_comparison.png` | Cross-language overlay on all three datasets |
+| 7 | `rust_over_python_ratio.png` | Rust/Python speedup ratio per algorithm |
+| 8 | `validation_summary.png` | MST weight correctness across all implementations |
 
 ### Visual Encoding
 

@@ -143,17 +143,17 @@ def load_csv(path):
     return rows
 
 def grouped_stats(rows, key_field, filter_fn=None):
-    """Group by key_field, compute median/min/max of time_s."""
+    """Group by key_field, compute mean/min/max of time_s."""
     groups = defaultdict(list)
     for r in rows:
         if filter_fn and not filter_fn(r):
             continue
         groups[r[key_field]].append(r['time_s'])
     keys = sorted(groups.keys())
-    medians = [np.median(groups[k]) for k in keys]
+    means = [np.mean(groups[k]) for k in keys]
     mins = [np.min(groups[k]) for k in keys]
     maxs = [np.max(groups[k]) for k in keys]
-    return keys, medians, mins, maxs
+    return keys, means, mins, maxs
 
 def load_validation(path):
     rows = []
@@ -179,23 +179,34 @@ def save_fig(fig, filename):
 # ── Load everything ──
 py_road    = load_csv(find_csv('python', 'roadNet-CA', 'scalability_roadNet-CA.csv'))
 py_amz     = load_csv(find_csv('python', 'amazon0302', 'scalability_amazon0302.csv'))
+py_orkut   = load_csv(find_csv('python', 'com-orkut', 'scalability_com-orkut.ungraph.csv'))
 py_road_sp = load_csv(find_csv('python', 'roadNet-CA', 'speedup_roadNet-CA.csv'))
 py_amz_sp  = load_csv(find_csv('python', 'amazon0302', 'speedup_amazon0302.csv'))
+py_orkut_sp = load_csv(find_csv('python', 'com-orkut', 'speedup_com-orkut.ungraph.csv'))
 
 rs_road    = load_csv(find_csv('rust', 'roadNet-CA', 'scalability_roadNet-CA.csv'))
 rs_amz     = load_csv(find_csv('rust', 'amazon0302', 'scalability_amazon0302.csv'))
+rs_orkut   = load_csv(find_csv('rust', 'com-orkut', 'scalability_com-orkut.ungraph.csv'))
 rs_road_sp = load_csv(find_csv('rust', 'roadNet-CA', 'speedup_roadNet-CA.csv'))
 rs_amz_sp  = load_csv(find_csv('rust', 'amazon0302', 'speedup_amazon0302.csv'))
+rs_orkut_sp = load_csv(find_csv('rust', 'com-orkut', 'speedup_com-orkut.ungraph.csv'))
 
 cpp_road = load_csv(find_csv('cpp', 'roadNet-CA', 'scalability_roadNet-CA.csv'))
 cpp_amz  = load_csv(find_csv('cpp', 'amazon0302', 'scalability_amazon0302.csv'))
+cpp_orkut = load_csv(find_csv('cpp', 'com-orkut', 'scalability_com-orkut.ungraph.csv'))
+
+# C++ speedup data: extract boruvka_par + boruvka_seq from scalability CSVs
+# (the thread sweep writes to the same scalability CSV with varying thread counts)
+cpp_road_sp = [r for r in cpp_road if r['algorithm'] in ('boruvka_par', 'boruvka_seq')]
+cpp_amz_sp  = [r for r in cpp_amz  if r['algorithm'] in ('boruvka_par', 'boruvka_seq')]
+cpp_orkut_sp = [r for r in cpp_orkut if r['algorithm'] in ('boruvka_par', 'boruvka_seq')]
 
 val_road = load_validation(find_csv('python', 'roadNet-CA', 'validation_roadNet-CA.csv'))
 val_amz  = load_validation(find_csv('python', 'amazon0302', 'validation_amazon0302.csv'))
 
-print(f"Loaded data: {len(py_road)+len(py_amz)} Python rows, "
-      f"{len(rs_road)+len(rs_amz)} Rust rows, "
-      f"{len(cpp_road)+len(cpp_amz)} C++ rows")
+print(f"Loaded data: {len(py_road)+len(py_amz)+len(py_orkut)} Python rows, "
+      f"{len(rs_road)+len(rs_amz)+len(rs_orkut)} Rust rows, "
+      f"{len(cpp_road)+len(cpp_amz)+len(cpp_orkut)} C++ rows")
 
 # ============================================================
 # Helper: add hardware annotation footer
@@ -272,7 +283,7 @@ def plot_scalability_annotated(data, title, filename, lang_label, dataset_desc):
     add_info_box(ax, [
         dataset_desc,
         f'Max edges: {max_edges:,}',
-        f'Runs: 5 · Metric: median',
+        f'Runs: 5 · Metric: average',
         f'Error bars: min–max range'
     ], loc='upper left')
     add_hw_footer(fig, f'{lang_label} · 5 runs per point')
@@ -333,7 +344,7 @@ def plot_combined_scalability(datasets, title, filename, dataset_desc):
         'Color = language · Shape = algorithm',
         'Dashed = no contraction',
     ], loc='center left')
-    add_hw_footer(fig, 'median of 3 runs')
+    add_hw_footer(fig, 'average of 3 runs')
 
     plt.tight_layout()
     save_fig(fig, filename)
@@ -355,41 +366,65 @@ plot_combined_scalability(
     'scalability_amazon0302.png',
     'amazon0302 · power-law · avg deg 6.1')
 
+plot_combined_scalability(
+    [('Python', py_orkut, '--', 1.6, 0.7),
+     ('Rust',   rs_orkut, '-',  2.2, 1.0),
+     ('C++',    cpp_orkut, ':', 1.8, 0.8)],
+    'com-Orkut — Scalability (Python vs Rust vs C++)',
+    'scalability_com-orkut.png',
+    'com-Orkut · social network · avg deg 76.3')
+
 # ============================================================
-# 5. Combined Parallel Speedup (Python + Rust on one figure)
+# 5. Combined Parallel Speedup (Python + Rust + C++ on one figure)
 # ============================================================
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+fig, axes = plt.subplots(3, 3, figsize=(20, 15))
 
 speedup_datasets = [
     (py_road_sp, 'roadNet-CA (Python)', 273266),
     (py_amz_sp,  'amazon0302 (Python)', 899792),
+    (py_orkut_sp, 'com-Orkut (Python)', 117185083),
     (rs_road_sp, 'roadNet-CA (Rust)',   273266),
     (rs_amz_sp,  'amazon0302 (Rust)',   899792),
+    (rs_orkut_sp, 'com-Orkut (Rust)',   117185083),
+    (cpp_road_sp, 'roadNet-CA (C++)',   273266),
+    (cpp_amz_sp,  'amazon0302 (C++)',   899792),
+    (cpp_orkut_sp, 'com-Orkut (C++)',   117185083),
 ]
 
 for ax, (data, ds_label, ds_edges) in zip(axes.flat, speedup_datasets):
     if not data:
         ax.set_title(f'{ds_label} — no data')
         continue
-    sizes_set = sorted(set(r['n_vertices'] for r in data))
+    # For C++ speedup data, compute from boruvka_seq baseline
+    par_recs = [r for r in data if r['algorithm'] == 'boruvka_par']
+    seq_recs = [r for r in data if r['algorithm'] == 'boruvka_seq']
+    # Use par_recs if available, else fall back to all data
+    sp_data = par_recs if par_recs else data
+
+    sizes_set = sorted(set(r['n_vertices'] for r in sp_data))
     cmap = plt.cm.Dark2
     for idx, sz in enumerate(sizes_set):
-        recs = [r for r in data if r['n_vertices'] == sz]
+        recs = [r for r in sp_data if r['n_vertices'] == sz]
         thread_set = sorted(set(r['threads'] for r in recs))
 
         if 'seq_baseline' in recs[0] and recs[0]['seq_baseline']:
             seq_base = float(recs[0]['seq_baseline'])
         else:
-            t1_times = [r['time_s'] for r in recs if r['threads'] == 1]
-            seq_base = np.median(t1_times) if t1_times else np.median([r['time_s'] for r in recs])
+            # Use boruvka_seq time at this size as baseline
+            seq_times = [r['time_s'] for r in seq_recs if r['n_vertices'] == sz]
+            if seq_times:
+                seq_base = np.mean(seq_times)
+            else:
+                t1_times = [r['time_s'] for r in recs if r['threads'] == 1]
+                seq_base = np.mean(t1_times) if t1_times else np.mean([r['time_s'] for r in recs])
 
         speedups = []
         sp_mins = []
         sp_maxs = []
         for tc in thread_set:
             times = [r['time_s'] for r in recs if r['threads'] == tc]
-            med = np.median(times)
-            speedups.append(seq_base / med)
+            avg = np.mean(times)
+            speedups.append(seq_base / avg)
             sp_mins.append(seq_base / np.max(times))
             sp_maxs.append(seq_base / np.min(times))
 
@@ -417,7 +452,7 @@ for ax, (data, ds_label, ds_edges) in zip(axes.flat, speedup_datasets):
     ax.set_title(ds_label, fontweight='bold')
     ax.legend(fontsize=7, loc='upper left')
 
-plt.suptitle('Parallel Speedup — Python (Numba) vs Rust (Rayon)',
+plt.suptitle('Parallel Speedup — Python (Numba) vs Rust (Rayon) vs C++ (std::thread)',
              fontsize=14, fontweight='bold', y=1.01)
 add_hw_footer(fig, 'Borůvka-Par vs Borůvka-Seq baseline')
 plt.tight_layout()
@@ -427,10 +462,11 @@ plt.close()
 # ============================================================
 # 7. Cross-Language Comparison (Python vs Rust vs C++ overlay)
 # ============================================================
-fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
+fig, axes = plt.subplots(1, 3, figsize=(20, 5.5))
 for ax, (py_data, rs_data, cpp_data, title, ds_edges) in zip(axes, [
     (py_road, rs_road, cpp_road, 'roadNet-CA', 273266),
     (py_amz, rs_amz, cpp_amz, 'amazon0302', 899792),
+    (py_orkut, rs_orkut, cpp_orkut, 'com-Orkut', 117185083),
 ]):
     for algo in ['kruskal', 'boruvka_seq']:
         py_recs = [r for r in py_data if r['algorithm'] == algo]
@@ -477,7 +513,7 @@ for ax, (py_data, rs_data, cpp_data, title, ds_edges) in zip(axes, [
     ], loc='upper left')
 
 plt.suptitle('Python (Numba) vs Rust (Rayon) vs C++', fontsize=14, fontweight='bold', y=1.01)
-add_hw_footer(fig, 'median of runs')
+add_hw_footer(fig, 'average of runs')
 plt.tight_layout()
 save_fig(fig, 'python_vs_rust_comparison.png')
 plt.close()
@@ -485,10 +521,11 @@ plt.close()
 # ============================================================
 # 8. Rust/Python Speedup Ratio
 # ============================================================
-fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
+fig, axes = plt.subplots(1, 3, figsize=(20, 5.5))
 for ax, (py_data, rs_data, title) in zip(axes, [
     (py_road, rs_road, 'roadNet-CA'),
     (py_amz, rs_amz, 'amazon0302'),
+    (py_orkut, rs_orkut, 'com-Orkut'),
 ]):
     for algo in ['kruskal', 'boruvka_seq']:
         py_sizes, py_meds, _, _ = grouped_stats(
@@ -535,37 +572,53 @@ plt.close()
 
 
 # ============================================================
-# 9. NEW: Parallel Efficiency Plot
+# 9. Parallel Efficiency Plot (Python + Rust + C++)
 # ============================================================
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+fig, axes = plt.subplots(3, 3, figsize=(20, 15))
 
 plot_configs = [
     (py_road_sp, 'Python/Numba — roadNet-CA', 0, 0),
     (py_amz_sp, 'Python/Numba — amazon0302', 0, 1),
+    (py_orkut_sp, 'Python/Numba — com-Orkut', 0, 2),
     (rs_road_sp, 'Rust/Rayon — roadNet-CA', 1, 0),
     (rs_amz_sp, 'Rust/Rayon — amazon0302', 1, 1),
+    (rs_orkut_sp, 'Rust/Rayon — com-Orkut', 1, 2),
+    (cpp_road_sp, 'C++/std::thread — roadNet-CA', 2, 0),
+    (cpp_amz_sp, 'C++/std::thread — amazon0302', 2, 1),
+    (cpp_orkut_sp, 'C++/std::thread — com-Orkut', 2, 2),
 ]
 
 for data, title, row, col in plot_configs:
     ax = axes[row][col]
-    sizes_set = sorted(set(r['n_vertices'] for r in data))
+    if not data:
+        ax.set_title(f'{title} — no data')
+        continue
+    par_recs = [r for r in data if r['algorithm'] == 'boruvka_par']
+    seq_recs = [r for r in data if r['algorithm'] == 'boruvka_seq']
+    sp_data = par_recs if par_recs else data
+
+    sizes_set = sorted(set(r['n_vertices'] for r in sp_data))
     cmap = plt.cm.Dark2
 
     for idx, sz in enumerate(sizes_set):
-        recs = [r for r in data if r['n_vertices'] == sz]
+        recs = [r for r in sp_data if r['n_vertices'] == sz]
         thread_set = sorted(set(r['threads'] for r in recs))
 
-        # Determine baseline: use seq_baseline if available, else 1-thread median
+        # Determine baseline: use seq_baseline if available, else boruvka_seq, else 1-thread
         if 'seq_baseline' in recs[0] and recs[0]['seq_baseline']:
             seq_base = float(recs[0]['seq_baseline'])
         else:
-            t1_times = [r['time_s'] for r in recs if r['threads'] == 1]
-            seq_base = np.median(t1_times) if t1_times else np.median([r['time_s'] for r in recs])
+            seq_times = [r['time_s'] for r in seq_recs if r['n_vertices'] == sz]
+            if seq_times:
+                seq_base = np.mean(seq_times)
+            else:
+                t1_times = [r['time_s'] for r in recs if r['threads'] == 1]
+                seq_base = np.mean(t1_times) if t1_times else np.mean([r['time_s'] for r in recs])
 
         efficiencies = []
         for tc in thread_set:
             times = [r['time_s'] for r in recs if r['threads'] == tc]
-            speedup = seq_base / np.median(times)
+            speedup = seq_base / np.mean(times)
             efficiencies.append(speedup / tc * 100)
 
         color = cmap(idx / max(len(sizes_set)-1, 1))
@@ -645,27 +698,174 @@ if all_val:
     plt.close()
 
 # ============================================================
-# Summary
+# Benchmark Summary Table
+# ============================================================
+def print_summary_table():
+    """Print ASCII art summary tables and save LaTeX file."""
+    all_datasets = [
+        ('roadNet-CA', {'Python': py_road, 'Rust': rs_road, 'C++': cpp_road}),
+        ('amazon0302', {'Python': py_amz, 'Rust': rs_amz, 'C++': cpp_amz}),
+        ('com-Orkut',  {'Python': py_orkut, 'Rust': rs_orkut, 'C++': cpp_orkut}),
+    ]
+    algos_order = ['kruskal', 'boruvka_seq', 'boruvka_seq_nc', 'boruvka_par', 'boruvka_par_nc']
+    langs_order = ['Python', 'Rust', 'C++']
+
+    # Build rows matching the plot data points
+    plot_rows = []
+    for ds_name, lang_data in all_datasets:
+        for lang in langs_order:
+            data = lang_data.get(lang, [])
+            if not data:
+                continue
+            for algo in algos_order:
+                recs = [r for r in data if r['algorithm'] == algo]
+                if not recs:
+                    continue
+                for sz in sorted(set(r['n_vertices'] for r in recs)):
+                    sz_recs = [r for r in recs if r['n_vertices'] == sz]
+                    times = [r['time_s'] for r in sz_recs]
+                    plot_rows.append({
+                        'dataset': ds_name, 'algorithm': algo, 'language': lang,
+                        'vertices': sz, 'edges': sz_recs[0]['n_edges'],
+                        'threads': sz_recs[0].get('threads', 1),
+                        'runs': len(times),
+                        'avg': float(np.mean(times)),
+                        'std': float(np.std(times)),
+                        'min': float(np.min(times)),
+                        'max': float(np.max(times)),
+                    })
+
+    if not plot_rows:
+        print("\n  No benchmark data found — skipping summary table.")
+        return
+
+    # ASCII helpers
+    def sep(ws):
+        return '+' + '+'.join('-' * (w + 2) for w in ws) + '+'
+    def arow(vals, ws):
+        cells = []
+        for i, (v, w) in enumerate(zip(vals, ws)):
+            cells.append(f' {v:<{w}} ' if i < 3 else f' {v:>{w}} ')
+        return '|' + '|'.join(cells) + '|'
+
+    # ── Table 1: Detailed scalability data ──
+    W = [12, 18, 6, 10, 11, 4, 4, 10, 9, 10, 10]
+    headers = ['Dataset', 'Algorithm', 'Lang', 'Vertices', 'Edges', 'Thr', 'Runs',
+               'Avg (s)', 'Std (s)', 'Min (s)', 'Max (s)']
+    print(f"\n  SCALABILITY DATA (same data points as plots, average of N runs)\n")
+    print(sep(W))
+    print(arow(headers, W))
+    print(sep(W))
+    prev_ds = None
+    for r in plot_rows:
+        if r['dataset'] != prev_ds and prev_ds is not None:
+            print(sep(W))
+        ds_col = r['dataset'] if r['dataset'] != prev_ds else ""
+        prev_ds = r['dataset']
+        al = ALGO_LABELS.get(r['algorithm'], r['algorithm'])
+        print(arow([ds_col, al, r['language'],
+                     f"{r['vertices']:,}", f"{r['edges']:,}",
+                     str(r['threads']), str(r['runs']),
+                     f"{r['avg']:.6f}", f"{r['std']:.6f}",
+                     f"{r['min']:.6f}", f"{r['max']:.6f}"], W))
+    print(sep(W))
+
+    # ── Table 2: Cross-language comparison at max size ──
+    W2 = [12, 18, 10, 11, 12, 12, 12, 8]
+    headers2 = ['Dataset', 'Algorithm', 'Vertices', 'Edges',
+                'Python (s)', 'Rust (s)', 'C++ (s)', 'Fastest']
+    print(f"\n  CROSS-LANGUAGE COMPARISON (avg time at max graph size, * = fastest)\n")
+    print(sep(W2))
+    print(arow(headers2, W2))
+    print(sep(W2))
+    prev_ds2 = None
+    for ds_name, lang_data in all_datasets:
+        if prev_ds2 is not None:
+            print(sep(W2))
+        prev_ds2 = ds_name
+        for algo in algos_order:
+            tbl, meta = {}, {}
+            for lang in langs_order:
+                data = lang_data.get(lang, [])
+                recs = [r for r in data if r['algorithm'] == algo]
+                if not recs:
+                    continue
+                max_v = max(r['n_vertices'] for r in recs)
+                tbl[lang] = float(np.mean([r['time_s'] for r in recs if r['n_vertices'] == max_v]))
+                meta['vertices'] = max_v
+                meta['edges'] = [r for r in recs if r['n_vertices'] == max_v][0]['n_edges']
+            if not tbl:
+                continue
+            fastest = min(tbl, key=tbl.get)
+            py_s = f"{tbl['Python']:.4f}" if 'Python' in tbl else "—"
+            rs_s = f"{tbl['Rust']:.4f}" if 'Rust' in tbl else "—"
+            cpp_s = f"{tbl['C++']:.4f}" if 'C++' in tbl else "—"
+            if fastest == 'Python': py_s = f"*{py_s}"
+            elif fastest == 'Rust': rs_s = f"*{rs_s}"
+            elif fastest == 'C++': cpp_s = f"*{cpp_s}"
+            al = ALGO_LABELS.get(algo, algo)
+            print(arow([ds_name, al,
+                         f"{meta['vertices']:,}", f"{meta['edges']:,}",
+                         py_s, rs_s, cpp_s, fastest], W2))
+    print(sep(W2))
+
+    # ── Save LaTeX file (silent) ──
+    latex_path = os.path.join(FIGURES_DIR, 'benchmark_summary.tex')
+    with open(latex_path, 'w') as f:
+        f.write("% Auto-generated by generate_plots.py\n")
+        f.write("% Requires: \\usepackage{booktabs, float}\n\n")
+        f.write("\\begin{table}[H]\n\\centering\n")
+        f.write("\\caption{Cross-language performance comparison — average execution time (seconds) "
+                "at maximum graph size. \\textbf{Bold} = fastest.}\n")
+        f.write("\\label{tab:benchmark_summary}\n\\small\n")
+        f.write("\\begin{tabular}{llrrrr}\n\\toprule\n")
+        f.write("Dataset & Algorithm & Vertices & Python (s) & Rust (s) & C++ (s) \\\\\n\\midrule\n")
+        for ds_name, lang_data in all_datasets:
+            first_ds = True
+            for algo in algos_order:
+                tbl, v_max = {}, 0
+                for lang in langs_order:
+                    data = lang_data.get(lang, [])
+                    recs = [r for r in data if r['algorithm'] == algo]
+                    if not recs: continue
+                    mv = max(r['n_vertices'] for r in recs)
+                    tbl[lang] = float(np.mean([r['time_s'] for r in recs if r['n_vertices'] == mv]))
+                    v_max = max(v_max, mv)
+                if not tbl: continue
+                fastest = min(tbl, key=tbl.get)
+                ds_col = ds_name if first_ds else ""
+                al = ALGO_LABELS.get(algo, algo)
+                def fc(lk):
+                    if lk not in tbl: return "—"
+                    v = f"{tbl[lk]:.4f}"
+                    return f"\\textbf{{{v}}}" if lk == fastest else v
+                f.write(f"{ds_col} & {al} & {v_max:,} & {fc('Python')} & {fc('Rust')} & {fc('C++')} \\\\\n")
+                first_ds = False
+            f.write("\\midrule\n")
+        f.seek(f.tell() - len("\\midrule\n"))
+        f.write("\\bottomrule\n\\end{tabular}\n\\end{table}\n")
+    print(f"\n  LaTeX table saved to: {latex_path}")
+
+print_summary_table()
+
+# ============================================================
+# Figure file summary
 # ============================================================
 print(f"\n{'='*65}")
-print(f"All annotated figures saved to {FIGURES_DIR}/")
+print(f"All figures saved to {FIGURES_DIR}/")
 print(f"{'='*65}")
-
-figures = [
-    'python_road_scalability.png',
-    'python_amazon_scalability.png',
-    'rust_road_scalability.png',
-    'rust_amazon_scalability.png',
-    'cpp_road_scalability.png',
-    'cpp_amazon_scalability.png',
-    'python_parallel_speedup.png',
-    'rust_parallel_speedup.png',
+expected_figures = [
+    'scalability_roadNet-CA.png',
+    'scalability_amazon0302.png',
+    'scalability_com-orkut.png',
+    'parallel_speedup.png',
+    'parallel_efficiency.png',
     'python_vs_rust_comparison.png',
     'rust_over_python_ratio.png',
-    'parallel_efficiency.png',
     'validation_summary.png',
+    'benchmark_summary.tex',
 ]
-for f in figures:
+for f in expected_figures:
     for d in [FIGURES_DIR, REPORT_FIGURES_DIR]:
         path = os.path.join(d, f)
         if os.path.exists(path):
@@ -673,3 +873,4 @@ for f in figures:
             print(f"  ✓ {d}/{f} ({size_kb:.0f} KB)")
         else:
             print(f"  ✗ {d}/{f} MISSING")
+
