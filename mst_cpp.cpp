@@ -106,6 +106,8 @@ double compute_std(const vector<double> &v, double mean) {
 // Returns: (mst_weight, elapsed_seconds)
 // ============================================================
 pair<long long, double> run_kruskal(const vector<Edge> &edges, int n) {
+  auto t_start = chrono::high_resolution_clock::now();
+
   vector<int> parent(n);
   vector<int> rank(n, 0);
   for (int i = 0; i < n; i++) parent[i] = i;
@@ -113,8 +115,6 @@ pair<long long, double> run_kruskal(const vector<Edge> &edges, int n) {
   // Copy edges for sorting (preserves original for other algorithms)
   vector<Edge> edges_copy = edges;
 
-  // Timer covers sort + MST (matches Rust/Python timing)
-  auto t_start = chrono::high_resolution_clock::now();
   sort(edges_copy.begin(), edges_copy.end());
 
   vector<Edge> mst;
@@ -142,6 +142,8 @@ pair<long long, double> run_kruskal(const vector<Edge> &edges, int n) {
 // Returns: (mst_weight, elapsed_seconds)
 // ============================================================
 pair<long long, double> run_boruvka_seq(const vector<Edge> &edges, int n) {
+  auto t_start = chrono::high_resolution_clock::now();
+
   // parent and rank prepartions
   vector<int> parent(n);
   vector<int> rank(n, 0);
@@ -157,8 +159,6 @@ pair<long long, double> run_boruvka_seq(const vector<Edge> &edges, int n) {
   // Step 2: start minimum spanning tree
   vector<Edge> mst;
   int edges_num = 0;
-
-  auto t_start = chrono::high_resolution_clock::now();
 
   while(components_num > 1){
       vector<int> cheapest(n, -1); // -1 means have not found cheapest yet
@@ -212,6 +212,8 @@ pair<long long, double> run_boruvka_seq(const vector<Edge> &edges, int n) {
 // Returns: (mst_weight, elapsed_seconds)
 // ============================================================
 pair<long long, double> run_boruvka_par(const vector<Edge> &edges, int n, int num_threads = 0) {
+  auto t_start = chrono::high_resolution_clock::now();
+
   // parent and rank prepartions
   vector<int> parent(n);
   vector<int> rank(n, 0);
@@ -233,8 +235,6 @@ pair<long long, double> run_boruvka_par(const vector<Edge> &edges, int n, int nu
   int maximum_edges = edges.size();
   int threads_edge = maximum_edges / par_num_threads;
   vector<mutex> component_locks(n);
-
-  auto t_start = chrono::high_resolution_clock::now();
 
   while (components_num > 1) {
       vector<int> cheapest(n, -1); // -1 means have not found cheapest yet

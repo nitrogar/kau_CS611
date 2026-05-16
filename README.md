@@ -113,15 +113,19 @@ g++ -O2 -std=c++17 -pthread -o mst_cpp mst_cpp.cpp
 ```bash
 chmod +x run_benchmarks.sh
 
-./run_benchmarks.sh              # Everything: Rust + C++ + Python, all datasets, then plots
-./run_benchmarks.sh rust         # Rust only, all datasets
-./run_benchmarks.sh python       # Python only, all datasets
-./run_benchmarks.sh cpp          # C++ only, all datasets
+./run_benchmarks.sh              # Everything: scalability + speedup + plots (all languages)
+./run_benchmarks.sh rust         # Rust only, all datasets (scalability + speedup)
+./run_benchmarks.sh python       # Python only, all datasets (scalability + speedup)
+./run_benchmarks.sh cpp          # C++ only, all datasets (scalability only)
 ./run_benchmarks.sh rust amazon  # Rust + Amazon only
-./run_benchmarks.sh rust road    # Rust + roadNet-CA only
-./run_benchmarks.sh rust orkut   # Rust + com-Orkut only
-./run_benchmarks.sh threads      # Thread scaling sweep (Rust)
 ./run_benchmarks.sh plots        # Regenerate plots from latest run
+
+# Thread sweep modes (generate speedup_*.csv for speedup/efficiency plots)
+./run_benchmarks.sh cpp_threads  # C++ thread sweep only (all datasets)
+./run_benchmarks.sh speedup      # Both Rust + C++ thread sweeps
+
+# Optional: detailed per-thread-count output (writes to threads/t1_seq, t2, t4, ... folders)
+./run_benchmarks.sh threads      # Rust detailed thread scaling (com-Orkut only)
 ```
 
 **Option B — Individual runs:**

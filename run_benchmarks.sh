@@ -247,9 +247,12 @@ run_cpp_speedup() {
         local ds_stem
         ds_stem=$(basename "$DS_FILE" .txt)
 
+        # Write to a temp subdir so we don't pollute scalability CSVs
+        local tmp_out="$RUN_DIR/cpp/$DS_NAME/_speedup_tmp"
+        local final_out="$RUN_DIR/cpp/$DS_NAME"
+        mkdir -p "$tmp_out"
+
         # Sequential baseline (T=1)
-        local sp_out="$RUN_DIR/cpp/$DS_NAME"
-        mkdir -p "$sp_out"
         echo "  → C++ seq baseline: $DS_NAME (T=1)..."
         ./mst_cpp \
             --dataset "$DS_FILE" \
@@ -257,9 +260,9 @@ run_cpp_speedup() {
             --algorithms boruvka_seq \
             --num-threads 1 \
             --runs "$RUNS" \
-            --output-dir "$sp_out"
+            --output-dir "$tmp_out"
 
-        # Parallel at each thread count → append to speedup CSV
+        # Parallel at each thread count
         for T in ${THREAD_COUNTS//,/ }; do
             echo "  → C++ par: $DS_NAME (T=$T)..."
             ./mst_cpp \
@@ -268,8 +271,18 @@ run_cpp_speedup() {
                 --algorithms boruvka_par \
                 --num-threads "$T" \
                 --runs "$RUNS" \
-                --output-dir "$sp_out"
+                --output-dir "$tmp_out"
         done
+
+        # Rename scalability_*.csv → speedup_*.csv in the final output dir
+        for f in "$tmp_out"/scalability_*.csv; do
+            local base
+            base=$(basename "$f")
+            local speedup_name="${base/scalability_/speedup_}"
+            mv "$f" "$final_out/$speedup_name"
+            echo "  ✓ $final_out/$speedup_name"
+        done
+        rm -rf "$tmp_out"
     done
     done_msg "C++ thread scaling"
 }
@@ -313,7 +326,6 @@ case "$MODE" in
             orkut)   run_cpp_orkut ;;
             *)       run_cpp_amazon; run_cpp_road; run_cpp_orkut ;;
         esac
-        run_cpp_speedup
         ;;
     threads)
         build_rust
@@ -334,7 +346,6 @@ case "$MODE" in
         run_rust_amazon
         run_rust_road
         run_rust_orkut
-        run_thread_scaling
         build_cpp
         run_cpp_amazon
         run_cpp_road
