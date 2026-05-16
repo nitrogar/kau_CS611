@@ -399,6 +399,606 @@ cd report && pdflatex CS611_Project_Report.tex
 
 ---
 
+## Algorithm Implementations
+
+> All three languages share the same algorithmic structure: Union-Find for component tracking, identical PRNG (LCG seed=42) for reproducible edge weights, and the same sorted-edges convention. Below are the core implementations for grading reference.
+
+### Union-Find (Disjoint Set)
+
+All MST algorithms use **Union-Find** with **path compression** and **union by rank** for O(α(n)) amortized component operations.
+
+<details>
+<summary><b>Python (Numba JIT)</b></summary>
+
+```python
+@njit
+def uf_init(n):
+    parent = np.arange(n, dtype=np.int32)
+    rank = np.zeros(n, dtype=np.int32)
+    return parent, rank
+
+@njit
+def uf_find(parent, x):
+    while parent[x] != x:
+        parent[x] = parent[parent[x]]  # path splitting
+        x = parent[x]
+    return x
+
+@njit
+def uf_union(parent, rank, a, b):
+    a = uf_find(parent, a)
+    b = uf_find(parent, b)
+    if a == b:
+        return False
+    if rank[a] < rank[b]:
+        a, b = b, a
+    parent[b] = a
+    if rank[a] == rank[b]:
+        rank[a] += 1
+    return True
+```
+
+</details>
+
+<details>
+<summary><b>Rust</b></summary>
+
+```rust
+struct UnionFind {
+    parent: Vec<i32>,
+    rank: Vec<i32>,
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self { parent: (0..n as i32).collect(), rank: vec![0; n] }
+    }
+
+    fn find(&mut self, mut x: i32) -> i32 {
+        while self.parent[x as usize] != x {
+            self.parent[x as usize] = self.parent[self.parent[x as usize] as usize];
+            x = self.parent[x as usize];
+        }
+        x
+    }
+
+    fn union(&mut self, a: i32, b: i32) -> bool {
+        let (mut ra, mut rb) = (self.find(a), self.find(b));
+        if ra == rb { return false; }
+        if self.rank[ra as usize] < self.rank[rb as usize] { std::mem::swap(&mut ra, &mut rb); }
+        self.parent[rb as usize] = ra;
+        if self.rank[ra as usize] == self.rank[rb as usize] { self.rank[ra as usize] += 1; }
+        true
+    }
+}
+```
+
+</details>
+
+<details>
+<summary><b>C++</b></summary>
+
+```cpp
+int find(int i, vector<int> &parent) {
+    if (parent[i] == i) return i;
+    return parent[i] = find(parent[i], parent);
+}
+
+bool unionfunction(int sn, int dn, vector<int> &parent, vector<int> &rank) {
+    int rootSN = find(sn, parent);
+    int rootDN = find(dn, parent);
+    if (rootSN != rootDN) {
+        if (rank[rootSN] < rank[rootDN]) parent[rootSN] = rootDN;
+        else if (rank[rootSN] > rank[rootDN]) parent[rootDN] = rootSN;
+        else { parent[rootSN] = rootDN; rank[rootDN]++; }
+        return true;
+    }
+    return false;
+}
+```
+
+</details>
+
+---
+
+### 1. Kruskal's Algorithm (Sequential) — `kruskal`
+
+**Strategy:** Sort all edges by weight, greedily add lightest edge that doesn't form a cycle. **O(E log E)**
+
+<details>
+<summary><b>Python (Numba JIT)</b> — <code>mst_python.py:75</code></summary>
+
+```python
+@njit
+def kruskal_numba(n, eu, ev, ew):
+    order = np.argsort(ew)                          # Step 1: Sort — O(E log E)
+    parent, rank = uf_init(n)
+    mst_weight = np.int64(0)
+    mst_count = 0
+    for idx in range(len(order)):                    # Step 2: Greedy selection — O(E·α(n))
+        i = order[idx]
+        u, v, w = eu[i], ev[i], ew[i]
+        if uf_find(parent, u) != uf_find(parent, v):
+            uf_union(parent, rank, u, v)
+            mst_weight += w
+            mst_count += 1
+            if mst_count == n - 1:                   # Step 3: Early termination
+                break
+    return mst_weight, mst_count
+```
+
+</details>
+
+<details>
+<summary><b>Rust</b> — <code>src/main.rs:118</code></summary>
+
+```rust
+fn kruskal(n: usize, edges: &EdgeArrays) -> (i64, usize) {
+    let m = edges.len();
+    let mut sorted: Vec<(i32, i32, i32)> = (0..m)
+        .map(|i| (edges.ew[i], edges.eu[i], edges.ev[i]))
+        .collect();
+    sorted.sort_unstable();                          // Step 1: Sort — O(E log E)
+
+    let mut uf = UnionFind::new(n);
+    let mut mst_weight: i64 = 0;
+    let mut mst_count: usize = 0;
+
+    for &(w, u, v) in &sorted {                      // Step 2: Greedy selection
+        if uf.find(u) != uf.find(v) {
+            uf.union(u, v);
+            mst_weight += w as i64;
+            mst_count += 1;
+            if mst_count == n - 1 { break; }
+        }
+    }
+    (mst_weight, mst_count)
+}
+```
+
+</details>
+
+<details>
+<summary><b>C++</b> — <code>mst_cpp.cpp:108</code></summary>
+
+```cpp
+pair<long long, double> run_kruskal(const vector<Edge> &edges, int n) {
+    vector<int> parent(n);
+    vector<int> rank(n, 0);
+    for (int i = 0; i < n; i++) parent[i] = i;
+
+    vector<Edge> edges_copy = edges;
+    auto t_start = chrono::high_resolution_clock::now();
+    sort(edges_copy.begin(), edges_copy.end());       // Step 1: Sort — O(E log E)
+
+    vector<Edge> mst;
+    for (size_t i = 0; i < edges_copy.size(); i++) {  // Step 2: Greedy selection
+        const Edge &edge = edges_copy[i];
+        if (unionfunction(edge.s, edge.d, parent, rank)) {
+            mst.push_back(edge);
+        }
+    }
+    auto t_end = chrono::high_resolution_clock::now();
+    double elapsed_s = chrono::duration<double>(t_end - t_start).count();
+
+    long long mst_weight = 0;
+    for (const auto &e : mst) mst_weight += e.w;
+    return {mst_weight, elapsed_s};
+}
+```
+
+</details>
+
+---
+
+### 2. Borůvka Sequential (with Contraction) — `boruvka_seq`
+
+**Strategy:** Each round, every component finds its cheapest outgoing edge → merge → contract intra-component edges. **O(E log V)** — edge set shrinks ~50% per round.
+
+<details>
+<summary><b>Python (Numba JIT)</b> — <code>mst_python.py:121</code></summary>
+
+```python
+@njit
+def boruvka_seq_numba(n, eu, ev, ew):
+    parent, rank = uf_init(n)
+    mst_weight = np.int64(0)
+    mst_count = 0
+    m = len(eu)
+    cheapest_w = np.empty(n, dtype=np.int32)
+    cheapest_idx = np.empty(n, dtype=np.int32)
+    n_comp = n
+
+    while n_comp > 1:
+        # Phase 1: Find-Min — cheapest outgoing edge per component
+        cheapest_w[:] = np.iinfo(np.int32).max
+        cheapest_idx[:] = -1
+        found = False
+        for i in range(m):
+            cu = uf_find(parent, eu[i])
+            cv = uf_find(parent, ev[i])
+            if cu != cv:
+                w = ew[i]
+                if w < cheapest_w[cu]:
+                    cheapest_w[cu] = w; cheapest_idx[cu] = i
+                if w < cheapest_w[cv]:
+                    cheapest_w[cv] = w; cheapest_idx[cv] = i
+                found = True
+        if not found: break
+
+        # Phase 2: Merge — union on cheapest edges
+        merged = 0
+        for c in range(n):
+            idx = cheapest_idx[c]
+            if idx >= 0:
+                if uf_union(parent, rank, eu[idx], ev[idx]):
+                    mst_weight += ew[idx]; mst_count += 1; merged += 1
+        if merged == 0: break
+        n_comp -= merged
+
+        # Phase 3: Contract — remove intra-component edges
+        new_m = 0
+        for i in range(m):
+            if uf_find(parent, eu[i]) != uf_find(parent, ev[i]):
+                eu[new_m] = eu[i]; ev[new_m] = ev[i]; ew[new_m] = ew[i]
+                new_m += 1
+        m = new_m
+
+    return mst_weight, mst_count
+```
+
+</details>
+
+<details>
+<summary><b>Rust</b> — <code>src/main.rs:160</code></summary>
+
+```rust
+fn boruvka_seq(n: usize, edges: &EdgeArrays) -> (i64, usize) {
+    let mut uf = UnionFind::new(n);
+    let (mut mst_weight, mut mst_count) = (0i64, 0usize);
+    let (mut eu, mut ev, mut ew) = (edges.eu.clone(), edges.ev.clone(), edges.ew.clone());
+    let mut m = eu.len();
+    let mut n_comp = n;
+    let mut cheapest_w = vec![i32::MAX; n];
+    let mut cheapest_idx: Vec<i32> = vec![-1; n];
+
+    while n_comp > 1 {
+        // Phase 1: Find-Min
+        cheapest_w.iter_mut().for_each(|x| *x = i32::MAX);
+        cheapest_idx.iter_mut().for_each(|x| *x = -1);
+        let mut found = false;
+        for i in 0..m {
+            let (cu, cv) = (uf.find(eu[i]), uf.find(ev[i]));
+            if cu != cv {
+                let w = ew[i];
+                if w < cheapest_w[cu as usize] { cheapest_w[cu as usize] = w; cheapest_idx[cu as usize] = i as i32; }
+                if w < cheapest_w[cv as usize] { cheapest_w[cv as usize] = w; cheapest_idx[cv as usize] = i as i32; }
+                found = true;
+            }
+        }
+        if !found { break; }
+
+        // Phase 2: Merge
+        let mut merged = 0usize;
+        for c in 0..n {
+            let idx = cheapest_idx[c];
+            if idx >= 0 {
+                let i = idx as usize;
+                if uf.union(eu[i], ev[i]) { mst_weight += ew[i] as i64; mst_count += 1; merged += 1; }
+            }
+        }
+        if merged == 0 { break; }
+        n_comp -= merged;
+
+        // Phase 3: Contract
+        let mut new_m = 0usize;
+        for i in 0..m {
+            if uf.find(eu[i]) != uf.find(ev[i]) {
+                eu[new_m] = eu[i]; ev[new_m] = ev[i]; ew[new_m] = ew[i]; new_m += 1;
+            }
+        }
+        m = new_m;
+    }
+    (mst_weight, mst_count)
+}
+```
+
+</details>
+
+> **Note:** C++ uses the No-Contraction variant for `boruvka_seq` (see Section 4 below).
+
+---
+
+### 3. Borůvka Parallel (with Contraction) — `boruvka_par`
+
+**Strategy:** Parallel component-ID flatten + parallel edge contraction. Sequential find-min and merge. Available in **Rust** and **Python**. C++ uses a different parallel approach (see Section 5).
+
+<details>
+<summary><b>Python (Numba JIT)</b> — <code>mst_python.py:318</code></summary>
+
+```python
+@njit(parallel=True)
+def _build_comp_ids(parent, n):
+    """Parallel component ID flattening."""
+    comp = np.empty(n, dtype=np.int32)
+    for i in prange(n):                              # ← PARALLEL (prange)
+        x = i
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        comp[i] = x
+    return comp
+
+@njit(parallel=True)
+def _contract_edges(eu, ev, ew, parent, m):
+    """Parallel edge contraction: mark internal edges."""
+    keep = np.empty(m, dtype=np.bool_)
+    for i in prange(m):                              # ← PARALLEL (prange)
+        cu = uf_find(parent, eu[i])
+        cv = uf_find(parent, ev[i])
+        keep[i] = (cu != cv)
+    return keep
+
+@njit
+def boruvka_par_numba(n, eu, ev, ew):
+    parent, rank = uf_init(n)
+    mst_weight = np.int64(0)
+    mst_count = 0
+    m = len(eu); n_comp = n
+    cheapest_w = np.empty(n, dtype=np.int32)
+    cheapest_idx = np.empty(n, dtype=np.int32)
+
+    while n_comp > 1:
+        comp_ids = _build_comp_ids(parent, n)        # ← PARALLEL phase
+
+        # Sequential find-min (avoids per-chunk allocation overhead)
+        cheapest_w[:] = np.iinfo(np.int32).max; cheapest_idx[:] = -1
+        found = False
+        for i in range(m):
+            cu, cv = comp_ids[eu[i]], comp_ids[ev[i]]
+            if cu != cv:
+                w = ew[i]
+                if w < cheapest_w[cu]: cheapest_w[cu] = w; cheapest_idx[cu] = i
+                if w < cheapest_w[cv]: cheapest_w[cv] = w; cheapest_idx[cv] = i
+                found = True
+        if not found: break
+
+        # Sequential merge
+        merged = 0
+        for c in range(n):
+            idx = cheapest_idx[c]
+            if idx >= 0:
+                if uf_union(parent, rank, eu[idx], ev[idx]):
+                    mst_weight += ew[idx]; mst_count += 1; merged += 1
+        if merged == 0: break
+        n_comp -= merged
+
+        keep = _contract_edges(eu, ev, ew, parent, m)  # ← PARALLEL phase
+        new_m = 0
+        for i in range(m):
+            if keep[i]:
+                eu[new_m] = eu[i]; ev[new_m] = ev[i]; ew[new_m] = ew[i]; new_m += 1
+        m = new_m
+
+    return mst_weight, mst_count
+```
+
+</details>
+
+<details>
+<summary><b>Rust (Rayon)</b> — <code>src/main.rs:380</code></summary>
+
+```rust
+fn boruvka_par(n: usize, edges: &EdgeArrays) -> (i64, usize) {
+    let mut parent: Vec<i32> = (0..n as i32).collect();
+    let mut rank: Vec<i32> = vec![0; n];
+    let (mut mst_weight, mut mst_count) = (0i64, 0usize);
+    let (mut eu, mut ev, mut ew) = (edges.eu.clone(), edges.ev.clone(), edges.ew.clone());
+    let mut m = eu.len();
+    let mut n_comp = n;
+    let mut cheapest_w = vec![i32::MAX; n];
+    let mut cheapest_idx: Vec<i32> = vec![-1; n];
+    let mut comp_ids: Vec<i32> = vec![0; n];
+
+    while n_comp > 1 {
+        // PARALLEL: flatten component IDs via Rayon par_iter
+        comp_ids.par_iter_mut().enumerate().for_each(|(i, cid)| {
+            let mut x = i as i32;
+            unsafe {
+                let p = parent.as_ptr();
+                while *p.add(x as usize) != x { x = *p.add(*p.add(x as usize) as usize); }
+            }
+            *cid = x;
+        });
+
+        // Sequential find-min
+        cheapest_w.iter_mut().for_each(|x| *x = i32::MAX);
+        cheapest_idx.iter_mut().for_each(|x| *x = -1);
+        let mut found = false;
+        for i in 0..m {
+            let (cu, cv) = (comp_ids[eu[i] as usize] as usize, comp_ids[ev[i] as usize] as usize);
+            if cu != cv {
+                let w = ew[i];
+                if w < cheapest_w[cu] { cheapest_w[cu] = w; cheapest_idx[cu] = i as i32; }
+                if w < cheapest_w[cv] { cheapest_w[cv] = w; cheapest_idx[cv] = i as i32; }
+                found = true;
+            }
+        }
+        if !found { break; }
+
+        // Sequential merge (inline find + union by rank)
+        let mut merged = 0usize;
+        for c in 0..n {
+            let idx = cheapest_idx[c];
+            if idx >= 0 {
+                // ... inline find with path splitting + union by rank ...
+                // (see full source for details — avoids UnionFind clone overhead)
+            }
+        }
+        if merged == 0 { break; }
+        n_comp -= merged;
+
+        // PARALLEL: edge contraction
+        // Re-flatten comp_ids, then filter intra-component edges
+        let mut new_m = 0usize;
+        for i in 0..m {
+            if comp_ids[eu[i] as usize] != comp_ids[ev[i] as usize] {
+                eu[new_m] = eu[i]; ev[new_m] = ev[i]; ew[new_m] = ew[i]; new_m += 1;
+            }
+        }
+        m = new_m;
+    }
+    (mst_weight, mst_count)
+}
+```
+
+</details>
+
+---
+
+### 4. Borůvka Sequential — No Contraction — `boruvka_seq_nc`
+
+**Strategy:** Same as `boruvka_seq` but **never removes** intra-component edges. Scans ALL edges every round → O(E·log V). Demonstrates why contraction is essential.
+
+<details>
+<summary><b>C++ (used as boruvka_seq)</b> — <code>mst_cpp.cpp:144</code></summary>
+
+```cpp
+pair<long long, double> run_boruvka_seq(const vector<Edge> &edges, int n) {
+    vector<int> parent(n), rank(n, 0);
+    for (int i = 0; i < n; i++) parent[i] = i;
+    int components_num = n;
+    vector<Edge> mst;
+
+    auto t_start = chrono::high_resolution_clock::now();
+
+    while (components_num > 1) {
+        vector<int> cheapest(n, -1);
+
+        // Phase 1: Find-Min (scans ALL edges every round — no contraction)
+        for (int i = 0; i < (int)edges.size(); i++) {
+            const Edge &edge = edges[i];
+            int group1 = find(edge.s, parent);
+            int group2 = find(edge.d, parent);
+            if (group1 != group2) {
+                if (cheapest[group1] == -1 || edge.w < edges[cheapest[group1]].w)
+                    cheapest[group1] = i;
+                else if (cheapest[group2] == -1 || edge.w < edges[cheapest[group2]].w)
+                    cheapest[group2] = i;
+            }
+        }
+
+        // Phase 2: Merge
+        bool merged_any = false;
+        for (int i = 0; i < n; i++) {
+            if (cheapest[i] != -1) {
+                const Edge &edge = edges[cheapest[i]];
+                if (unionfunction(edge.s, edge.d, parent, rank)) {
+                    mst.push_back(edge);
+                    components_num--;
+                    merged_any = true;
+                }
+            }
+        }
+        if (!merged_any) break;
+        // NO Phase 3 — edge set stays at full size
+    }
+    // ... timing and weight calculation ...
+}
+```
+
+</details>
+
+<details>
+<summary><b>Rust</b> — <code>src/main.rs:249</code> | <b>Python</b> — <code>mst_python.py:205</code></summary>
+
+Same structure as `boruvka_seq` above but without Phase 3 (no `new_m` compaction loop). The edge arrays are never modified.
+
+</details>
+
+---
+
+### 5. Borůvka Parallel — No Contraction — `boruvka_par` (C++) / `boruvka_par_nc` (Rust/Python)
+
+**Strategy:** Parallel find-min with **mutex-guarded** per-component updates. No contraction — scans all edges every round.
+
+<details>
+<summary><b>C++ (std::thread + mutex)</b> — <code>mst_cpp.cpp:214</code></summary>
+
+```cpp
+pair<long long, double> run_boruvka_par(const vector<Edge> &edges, int n, int num_threads) {
+    vector<int> parent(n), rank(n, 0);
+    for (int i = 0; i < n; i++) parent[i] = i;
+    int components_num = n;
+    vector<Edge> mst;
+
+    int par_num_threads = (num_threads > 0) ? num_threads : thread::hardware_concurrency();
+    int maximum_edges = edges.size();
+    int threads_edge = maximum_edges / par_num_threads;
+    vector<mutex> component_locks(n);
+
+    auto t_start = chrono::high_resolution_clock::now();
+
+    while (components_num > 1) {
+        vector<int> cheapest(n, -1);
+        vector<thread> threads;
+
+        // Phase 1: PARALLEL Find-Min — each thread handles a chunk of edges
+        for (int t = 0; t < par_num_threads; t++) {
+            int start = t * threads_edge;
+            int end = (t == par_num_threads - 1) ? maximum_edges : start + threads_edge;
+
+            threads.push_back(thread([&, start, end]() {
+                for (int i = start; i < end; i++) {
+                    const Edge &edge = edges[i];
+                    int group1 = find(edge.s, parent);
+                    int group2 = find(edge.d, parent);
+                    if (group1 != group2) {
+                        {   // Mutex-guarded update for component group1
+                            lock_guard<mutex> lock(component_locks[group1]);
+                            if (cheapest[group1] == -1 || edge.w < edges[cheapest[group1]].w)
+                                cheapest[group1] = i;
+                        }
+                        {   // Mutex-guarded update for component group2
+                            lock_guard<mutex> lock(component_locks[group2]);
+                            if (cheapest[group2] == -1 || edge.w < edges[cheapest[group2]].w)
+                                cheapest[group2] = i;
+                        }
+                    }
+                }
+            }));
+        }
+        for (auto &th : threads) if (th.joinable()) th.join();
+
+        // Phase 2: Sequential merge
+        bool merged_any = false;
+        for (int i = 0; i < n; i++) {
+            if (cheapest[i] != -1) {
+                if (unionfunction(edges[cheapest[i]].s, edges[cheapest[i]].d, parent, rank)) {
+                    mst.push_back(edges[cheapest[i]]);
+                    components_num--;
+                    merged_any = true;
+                }
+            }
+        }
+        if (!merged_any) break;
+        // No contraction — scans all edges every round
+    }
+    // ... timing and weight calculation ...
+}
+```
+
+</details>
+
+<details>
+<summary><b>Rust (Rayon par_iter)</b> — <code>src/main.rs:307</code> | <b>Python (Numba prange)</b> — <code>mst_python.py:386</code></summary>
+
+Same find-min + merge structure but uses **Rayon `par_iter`** (Rust) or **Numba `prange`** (Python) for parallel component-ID flatten. The find-min itself is sequential (avoids per-chunk allocation overhead). No edge contraction.
+
+</details>
+
+
+
 ## Key Results
 
 | Metric | Finding |

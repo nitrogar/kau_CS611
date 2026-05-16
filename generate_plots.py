@@ -195,11 +195,10 @@ cpp_road = load_csv(find_csv('cpp', 'roadNet-CA', 'scalability_roadNet-CA.csv'))
 cpp_amz  = load_csv(find_csv('cpp', 'amazon0302', 'scalability_amazon0302.csv'))
 cpp_orkut = load_csv(find_csv('cpp', 'com-orkut', 'scalability_com-orkut.ungraph.csv'))
 
-# C++ speedup data: extract boruvka_par + boruvka_seq from scalability CSVs
-# (the thread sweep writes to the same scalability CSV with varying thread counts)
-cpp_road_sp = [r for r in cpp_road if r['algorithm'] in ('boruvka_par', 'boruvka_seq')]
-cpp_amz_sp  = [r for r in cpp_amz  if r['algorithm'] in ('boruvka_par', 'boruvka_seq')]
-cpp_orkut_sp = [r for r in cpp_orkut if r['algorithm'] in ('boruvka_par', 'boruvka_seq')]
+# C++ speedup data: loaded from dedicated speedup CSVs (same format as Rust/Python)
+cpp_road_sp = load_csv(find_csv('cpp', 'roadNet-CA', 'speedup_roadNet-CA.csv'))
+cpp_amz_sp  = load_csv(find_csv('cpp', 'amazon0302', 'speedup_amazon0302.csv'))
+cpp_orkut_sp = load_csv(find_csv('cpp', 'com-orkut', 'speedup_com-orkut.ungraph.csv'))
 
 val_road = load_validation(find_csv('python', 'roadNet-CA', 'validation_roadNet-CA.csv'))
 val_amz  = load_validation(find_csv('python', 'amazon0302', 'validation_amazon0302.csv'))
